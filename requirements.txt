@@ -2,6 +2,7 @@ Flask>=3.0
 Flask-SQLAlchemy>=3.1
 Flask-Login>=0.6
 Flask-WTF>=1.2
+Flask-Mail>=0.10
 google-cloud-storage>=2.14
 google-cloud-spanner>=3.40
 sqlalchemy-spanner>=1.7

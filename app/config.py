@@ -25,3 +25,14 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME', '')
     WTF_CSRF_ENABLED = True
+
+    # Flask-Mail (configure via env vars)
+    MAIL_SERVER   = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
+    MAIL_PORT     = int(os.environ.get('MAIL_PORT', 587))
+    MAIL_USE_TLS  = os.environ.get('MAIL_USE_TLS', 'true').lower() == 'true'
+    MAIL_USERNAME = os.environ.get('MAIL_USERNAME', '')
+    MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD', '')
+    MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER', os.environ.get('MAIL_USERNAME', ''))
+
+    # Base URL used in password-reset links (set to Cloud Run URL in production)
+    APP_BASE_URL = os.environ.get('APP_BASE_URL', 'http://localhost:5000')

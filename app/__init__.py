@@ -1,5 +1,6 @@
 from flask import Flask
 from flask_login import LoginManager
+from flask_mail import Mail
 from flask_wtf.csrf import CSRFProtect
 
 from app.config import Config
@@ -8,6 +9,7 @@ from app.gcs import GCSService
 
 login_manager = LoginManager()
 csrf = CSRFProtect()
+mail = Mail()
 
 
 def create_app(config_class=Config):
@@ -17,6 +19,7 @@ def create_app(config_class=Config):
     db.init_app(app)
     login_manager.init_app(app)
     csrf.init_app(app)
+    mail.init_app(app)
 
     login_manager.login_view = 'auth.login'
     login_manager.login_message = 'Please log in to access this page.'
