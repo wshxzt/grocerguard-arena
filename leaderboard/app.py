@@ -104,6 +104,43 @@ def fetch_attacks():
     return results
 
 
+def fetch_exploits():
+    results = []
+    with get_db().snapshot() as snap:
+        rows = snap.execute_sql(
+            """SELECT
+                 a.id,
+                 a.attempted_at,
+                 a.cwe_id,
+                 COALESCE(c.name,  '—')  AS cwe_name,
+                 COALESCE(c.rank,  0)    AS cwe_rank,
+                 COALESCE(c.score, 0.0)  AS cwe_score,
+                 a.target_url,
+                 a.payload,
+                 a.evidence
+               FROM attack_log a
+               LEFT JOIN cwe_registry c USING (cwe_id)
+               WHERE a.status = 'confirmed'
+               ORDER BY a.attempted_at DESC"""
+        )
+        for r in rows:
+            ts = r[1]
+            if ts and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            results.append({
+                'id':           r[0],
+                'attempted_at': ts,
+                'cwe_id':       r[2],
+                'cwe_name':     r[3],
+                'cwe_rank':     r[4],
+                'cwe_score':    float(r[5]),
+                'target_url':   r[6] or '—',
+                'payload':      r[7] or '',
+                'evidence':     r[8] or '',
+            })
+    return results
+
+
 def fetch_runs():
     try:
         resp = http.get(f'{AGENT_URL}/runs', timeout=5)
@@ -141,6 +178,11 @@ def index():
     live    = fetch_live()
     attacks = fetch_attacks()
     return render_template('index.html', stats=stats, live=live, attacks=attacks)
+
+
+@app.route('/exploits')
+def exploits_page():
+    return render_template('exploits.html', exploits=fetch_exploits())
 
 
 @app.route('/runs')
