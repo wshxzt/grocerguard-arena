@@ -274,6 +274,24 @@ def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_prog
 
         if response.stop_reason == 'end_turn':
             logger.info('Agent finished.')
+            if on_progress:
+                try:
+                    summary_resp = client.messages.create(
+                        model='claude-haiku-4-5',
+                        max_tokens=600,
+                        system=(
+                            'Summarize this red team operation in 4-6 concise bullet points for the operator. '
+                            'Cover: vulnerability targeted, code change made, deploy outcome, '
+                            'attack result, and final logged status. Be specific — include filenames, '
+                            'payloads, and evidence snippets where available. No markdown headers.'
+                        ),
+                        messages=messages + [{'role': 'user', 'content': 'Summarize the operation above.'}],
+                    )
+                    summary = next((b.text for b in summary_resp.content if hasattr(b, 'text')), '')
+                    if summary:
+                        on_progress([{'type': 'text', 'text': f'📋 Operation summary:\n{summary}'}])
+                except Exception as e:
+                    logger.warning(f'Summary generation failed: {e}')
             break
 
         if response.stop_reason != 'tool_use':
