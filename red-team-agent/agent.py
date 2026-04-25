@@ -185,7 +185,7 @@ def dispatch_tool(name, inputs):
     return f'Unknown tool: {name}'
 
 
-def run_agent(cwe_id, cwe_name, cwe_score):
+def run_agent(cwe_id, cwe_name, cwe_score, instructions=''):
     logger.info(f'Starting red team agent for {cwe_id}: {cwe_name} (score={cwe_score})')
 
     user_message = (
@@ -196,6 +196,9 @@ def run_agent(cwe_id, cwe_name, cwe_score):
         f'Begin by exploring the codebase to find the best injection point. '
         f'Then inject the vulnerability, deploy, attack, and log your findings.'
     )
+
+    if instructions:
+        user_message += f'\n\nAdditional instructions:\n{instructions}'
 
     messages = [{'role': 'user', 'content': user_message}]
 

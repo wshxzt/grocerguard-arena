@@ -59,8 +59,11 @@ def main():
     cwe_id, cwe_name, cwe_score = cwe['cwe_id'], cwe['name'], cwe['score']
     logger.info(f'Selected {cwe_id}: {cwe_name} (score={cwe_score})')
 
-    # 4. Run the Claude agent
-    run_agent(cwe_id, cwe_name, cwe_score)
+    # 4. Run the Claude agent (with optional instructions from env)
+    instructions = os.environ.get('AGENT_INSTRUCTIONS', '').strip()
+    if instructions:
+        logger.info(f'Agent instructions: {instructions}')
+    run_agent(cwe_id, cwe_name, cwe_score, instructions=instructions)
 
     logger.info('=== Red Team Agent run complete ===')
 
