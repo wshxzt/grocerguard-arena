@@ -1,0 +1,100 @@
+:root {
+    --gg-green: #2d8a4e;
+    --gg-green-dark: #1e6137;
+    --gg-green-light: #e8f5ed;
+}
+
+body {
+    background-color: #f8fdf9;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.navbar {
+    background-color: var(--gg-green) !important;
+}
+
+.navbar-brand {
+    font-weight: 700;
+    font-size: 1.4rem;
+    letter-spacing: -0.5px;
+}
+
+.btn-primary {
+    background-color: var(--gg-green);
+    border-color: var(--gg-green);
+}
+
+.btn-primary:hover {
+    background-color: var(--gg-green-dark);
+    border-color: var(--gg-green-dark);
+}
+
+.btn-outline-primary {
+    color: var(--gg-green);
+    border-color: var(--gg-green);
+}
+
+.btn-outline-primary:hover {
+    background-color: var(--gg-green);
+    border-color: var(--gg-green);
+}
+
+.card {
+    border: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    transition: box-shadow .2s;
+}
+
+.card:hover {
+    box-shadow: 0 4px 16px rgba(0,0,0,.14);
+}
+
+.product-card img {
+    object-fit: cover;
+    height: 200px;
+    width: 100%;
+}
+
+.category-badge {
+    background-color: var(--gg-green-light);
+    color: var(--gg-green-dark);
+    font-size: .75rem;
+    font-weight: 600;
+    padding: .25rem .6rem;
+    border-radius: 999px;
+}
+
+.cart-badge {
+    background-color: #ff6b35;
+}
+
+.hero-banner {
+    background: linear-gradient(135deg, var(--gg-green) 0%, var(--gg-green-dark) 100%);
+    color: white;
+    padding: 3rem 0;
+    margin-bottom: 2rem;
+}
+
+.status-pending   { color: #856404; background: #fff3cd; }
+.status-confirmed { color: #0a3622; background: #d1e7dd; }
+.status-shipped   { color: #084298; background: #cfe2ff; }
+.status-delivered { color: #0a3622; background: #d1e7dd; }
+.status-cancelled { color: #842029; background: #f8d7da; }
+
+.status-badge {
+    padding: .3rem .7rem;
+    border-radius: 999px;
+    font-size: .8rem;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.sidebar-filter .list-group-item.active {
+    background-color: var(--gg-green);
+    border-color: var(--gg-green);
+}
+
+footer {
+    background-color: var(--gg-green-dark);
+    color: rgba(255,255,255,.8);
+}

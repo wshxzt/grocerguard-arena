@@ -1,0 +1,39 @@
+{% extends 'admin/base.html' %}
+{% block title %}Users – Admin{% endblock %}
+{% block content %}
+<h2 class="mb-4">Users</h2>
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>ID</th>
+          <th>Username</th>
+          <th>Email</th>
+          <th>Full Name</th>
+          <th>Role</th>
+          <th>Joined</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        <tr>
+          <td>{{ user.id }}</td>
+          <td class="fw-semibold">{{ user.username }}</td>
+          <td>{{ user.email }}</td>
+          <td>{{ user.full_name or '—' }}</td>
+          <td>
+            {% if user.is_admin %}
+              <span class="badge bg-danger">Admin</span>
+            {% else %}
+              <span class="badge bg-secondary">Customer</span>
+            {% endif %}
+          </td>
+          <td>{{ user.created_at.strftime('%b %d, %Y') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

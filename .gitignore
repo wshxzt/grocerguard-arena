@@ -1,0 +1,15 @@
+# Local SQLite database (use Spanner in production)
+instance/
+
+# Environment secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Claude session files
+.claude/

@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block title %}Order #{{ order.id }} – GrocerGuard{% endblock %}
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex align-items-center mb-4">
+    <a href="{{ url_for('orders.order_history') }}" class="btn btn-outline-secondary btn-sm me-3">
+      <i class="bi bi-arrow-left"></i>
+    </a>
+    <h2 class="mb-0">Order <span title="{{ order.id }}">#{{ order.id[:8] }}</span></h2>
+    <span class="status-badge status-{{ order.status }} ms-3">{{ order.status }}</span>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-md-8">
+      <div class="card p-4">
+        <h5 class="mb-3">Items</h5>
+        {% for item in order.items %}
+        <div class="d-flex align-items-center mb-3">
+          <img src="{{ item.product.get_image_url(gcs) }}" alt="{{ item.product.name }}"
+               style="width:60px;height:60px;object-fit:cover;border-radius:8px;" class="me-3">
+          <div class="flex-grow-1">
+            <div class="fw-semibold">{{ item.product.name }}</div>
+            <div class="text-muted small">${{ "%.2f"|format(item.unit_price) }} × {{ item.quantity }}</div>
+          </div>
+          <div class="fw-bold text-success">${{ "%.2f"|format(item.subtotal) }}</div>
+        </div>
+        {% endfor %}
+        <hr>
+        <div class="d-flex justify-content-end">
+          <span class="fw-bold fs-5">Total: <span class="text-success">${{ "%.2f"|format(order.total_price) }}</span></span>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-4">
+        <h5 class="mb-3">Delivery Info</h5>
+        <p class="text-muted small mb-1"><i class="bi bi-calendar me-1"></i>Placed on {{ order.created_at.strftime('%B %d, %Y at %I:%M %p') }}</p>
+        <p class="fw-semibold mb-1">Shipping Address</p>
+        <p class="text-muted">{{ order.shipping_address }}</p>
+        {% if order.notes %}
+        <p class="fw-semibold mb-1">Notes</p>
+        <p class="text-muted">{{ order.notes }}</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

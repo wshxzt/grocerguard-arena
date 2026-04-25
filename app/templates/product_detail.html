@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block title %}{{ product.name }} – GrocerGuard{% endblock %}
+{% block content %}
+<div class="container mt-4">
+  <nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{{ url_for('products.index') }}">Shop</a></li>
+      <li class="breadcrumb-item"><a href="{{ url_for('products.index', category=product.category) }}">{{ product.category }}</a></li>
+      <li class="breadcrumb-item active">{{ product.name }}</li>
+    </ol>
+  </nav>
+
+  <div class="row g-4">
+    <div class="col-md-5">
+      <img src="{{ product.get_image_url(gcs) }}" class="img-fluid rounded shadow" alt="{{ product.name }}">
+    </div>
+    <div class="col-md-7">
+      <span class="category-badge mb-2 d-inline-block">{{ product.category }}</span>
+      <h2 class="fw-bold">{{ product.name }}</h2>
+      <p class="text-muted">{{ product.unit }}</p>
+      <p class="fs-3 fw-bold text-success">${{ "%.2f"|format(product.price) }}</p>
+
+      {% if product.description %}
+        <p class="text-secondary">{{ product.description }}</p>
+      {% endif %}
+
+      <p class="mb-1">
+        <span class="fw-semibold">In stock:</span>
+        {% if product.stock > 0 %}
+          <span class="text-success">{{ product.stock }} available</span>
+        {% else %}
+          <span class="text-danger">Out of stock</span>
+        {% endif %}
+      </p>
+
+      {% if current_user.is_authenticated and product.stock > 0 %}
+      <form action="{{ url_for('orders.add_to_cart', product_id=product.id) }}" method="post" class="mt-3 d-flex gap-2 align-items-center">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="number" class="form-control" name="quantity" value="1" min="1" max="{{ product.stock }}" style="width:80px">
+        <button class="btn btn-primary"><i class="bi bi-cart-plus me-1"></i>Add to Cart</button>
+      </form>
+      {% elif not current_user.is_authenticated %}
+      <a href="{{ url_for('auth.login') }}" class="btn btn-primary mt-3">Login to Buy</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
