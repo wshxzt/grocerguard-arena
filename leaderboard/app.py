@@ -3,7 +3,7 @@ import os
 import logging
 from datetime import timezone
 import requests as http
-from flask import Flask, render_template
+from flask import Flask, render_template, abort
 from google.cloud import spanner
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,7 @@ def fetch_attacks():
     with get_db().snapshot() as snap:
         rows = snap.execute_sql(
             """SELECT
+                 a.id,
                  a.attempted_at,
                  a.cwe_id,
                  COALESCE(c.name,  '—')   AS cwe_name,
@@ -87,21 +88,62 @@ def fetch_attacks():
                ORDER BY a.attempted_at DESC"""
         )
         for r in rows:
-            ts = r[0]
+            ts = r[1]
             if ts and ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
             results.append({
+                'id':           r[0],
                 'attempted_at': ts,
-                'cwe_id':       r[1],
-                'cwe_name':     r[2],
-                'cwe_rank':     r[3],
-                'cwe_score':    float(r[4]),
-                'status':       r[5],
-                'target_url':   r[6] or '—',
-                'payload':      (r[7] or '')[:120],
-                'evidence':     (r[8] or '')[:200],
+                'cwe_id':       r[2],
+                'cwe_name':     r[3],
+                'cwe_rank':     r[4],
+                'cwe_score':    float(r[5]),
+                'status':       r[6],
+                'target_url':   r[7] or '—',
+                'payload':      (r[8] or '')[:120],
+                'evidence':     (r[9] or '')[:200],
             })
     return results
+
+
+def fetch_attack(attack_id):
+    with get_db().snapshot() as snap:
+        rows = list(snap.execute_sql(
+            """SELECT
+                 a.id,
+                 a.attempted_at,
+                 a.cwe_id,
+                 COALESCE(c.name,  '—')  AS cwe_name,
+                 COALESCE(c.rank,  0)    AS cwe_rank,
+                 COALESCE(c.score, 0.0)  AS cwe_score,
+                 a.status,
+                 a.target_url,
+                 a.payload,
+                 a.evidence
+               FROM attack_log a
+               LEFT JOIN cwe_registry c USING (cwe_id)
+               WHERE a.id = @id""",
+            params={'id': attack_id},
+            param_types={'id': spanner.param_types.STRING},
+        ))
+    if not rows:
+        return None
+    r = rows[0]
+    ts = r[1]
+    if ts and ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return {
+        'id':           r[0],
+        'attempted_at': ts,
+        'cwe_id':       r[2],
+        'cwe_name':     r[3],
+        'cwe_rank':     r[4],
+        'cwe_score':    float(r[5]),
+        'status':       r[6],
+        'target_url':   r[7] or '—',
+        'payload':      r[8] or '',
+        'evidence':     r[9] or '',
+    }
 
 
 def fetch_exploits():
@@ -178,6 +220,14 @@ def index():
     live    = fetch_live()
     attacks = fetch_attacks()
     return render_template('index.html', stats=stats, live=live, attacks=attacks)
+
+
+@app.route('/attacks/<attack_id>')
+def attack_detail(attack_id):
+    attack = fetch_attack(attack_id)
+    if not attack:
+        abort(404)
+    return render_template('attack.html', attack=attack)
 
 
 @app.route('/exploits')

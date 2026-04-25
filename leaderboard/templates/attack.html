@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attack Detail — {{ attack.cwe_id }} — GrocerGuard Arena</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+
+    header {
+      background: #161b22; border-bottom: 1px solid #30363d;
+      padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem;
+    }
+    header .logo { font-size: 1.1rem; font-weight: 700; }
+    header .logo span { color: #f85149; }
+    header nav { margin-left: auto; display: flex; gap: 1.5rem; }
+    header nav a { color: #8b949e; text-decoration: none; font-size: .85rem; transition: color .15s; }
+    header nav a:hover { color: #e6edf3; }
+
+    .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
+    .breadcrumb { font-size: .8rem; color: #8b949e; margin-bottom: 1.25rem; }
+    .breadcrumb a { color: #58a6ff; text-decoration: none; }
+    .breadcrumb a:hover { text-decoration: underline; }
+
+    .card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 10px; overflow: hidden;
+    }
+    .card-header {
+      padding: 1rem 1.5rem; border-bottom: 1px solid #30363d;
+      display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+    }
+    .cwe-chip {
+      font-family: monospace; font-size: .85rem;
+      background: #21262d; color: #58a6ff;
+      padding: 3px 10px; border-radius: 4px; text-decoration: none; white-space: nowrap;
+    }
+    .cwe-chip:hover { background: #2d333b; }
+    .cwe-name { font-weight: 600; font-size: 1rem; }
+    .header-meta { margin-left: auto; display: flex; gap: 1.25rem; align-items: center; flex-wrap: wrap; }
+    .meta-item { font-size: .78rem; color: #8b949e; }
+    .meta-item strong { color: #f0883e; }
+
+    .badge { display:inline-block; font-size:.75rem; font-weight:600; padding:3px 10px; border-radius:4px; white-space:nowrap; }
+    .badge-confirmed   { background:#1a4a1f; color:#3fb950; border-left: 3px solid #3fb950; }
+    .badge-unconfirmed { background:#3d2f00; color:#d29922; border-left: 3px solid #d29922; }
+    .badge-failed      { background:#21262d; color:#8b949e; border-left: 3px solid #484f58; }
+
+    .card-body { padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; }
+
+    .field-label {
+      font-size: .68rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .08em; color: #8b949e; margin-bottom: .45rem;
+    }
+
+    .url-link { color: #58a6ff; text-decoration: none; font-family: monospace; font-size: .85rem; }
+    .url-link:hover { text-decoration: underline; }
+
+    .code-block {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 1rem 1.25rem; font-family: 'Courier New', monospace; font-size: .82rem;
+      color: #f0883e; white-space: pre-wrap; word-break: break-all;
+      max-height: 300px; overflow-y: auto; line-height: 1.6;
+    }
+    .code-block.empty { color: #484f58; font-style: italic; }
+
+    .evidence-block {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 1rem 1.25rem; font-size: .82rem; line-height: 1.75;
+      color: #c9d1d9; white-space: pre-wrap; word-break: break-word;
+      max-height: 500px; overflow-y: auto;
+    }
+    .evidence-block.empty { color: #484f58; font-style: italic; }
+
+    .id-row { font-family: monospace; font-size: .75rem; color: #484f58; }
+
+    @media (max-width: 640px) {
+      header { padding: .75rem 1rem; }
+      .container { padding: 1.25rem 1rem; }
+      .header-meta { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>&#9888;</span> GrocerGuard Arena</div>
+  <nav>
+    <a href="/">Leaderboard</a>
+    <a href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">App</a>
+    <a href="https://red-team-agent-929315648024.us-central1.run.app" target="_blank">Red Team Console</a>
+  </nav>
+</header>
+
+<div class="container">
+  <p class="breadcrumb">
+    <a href="/">Leaderboard</a> &rsaquo; Attack Detail
+  </p>
+
+  <div class="card">
+    <div class="card-header">
+      <a class="cwe-chip"
+         href="https://cwe.mitre.org/data/definitions/{{ attack.cwe_id | replace('CWE-','') }}.html"
+         target="_blank">{{ attack.cwe_id }}</a>
+      <span class="cwe-name">{{ attack.cwe_name }}</span>
+
+      {% if attack.status == 'confirmed' %}
+        <span class="badge badge-confirmed">confirmed</span>
+      {% elif attack.status == 'unconfirmed' %}
+        <span class="badge badge-unconfirmed">unconfirmed</span>
+      {% else %}
+        <span class="badge badge-failed">{{ attack.status }}</span>
+      {% endif %}
+
+      <div class="header-meta">
+        <span class="meta-item">Rank <strong>#{{ attack.cwe_rank }}</strong></span>
+        <span class="meta-item">Score <strong>{{ '%.1f' % attack.cwe_score }}</strong></span>
+        <span class="meta-item">{{ attack.attempted_at.strftime('%Y-%m-%d %H:%M UTC') if attack.attempted_at else '—' }}</span>
+      </div>
+    </div>
+
+    <div class="card-body">
+
+      {% if attack.target_url and attack.target_url != '—' %}
+      <div>
+        <div class="field-label">Target URL</div>
+        <a class="url-link" href="{{ attack.target_url }}" target="_blank">{{ attack.target_url }}</a>
+      </div>
+      {% endif %}
+
+      <div>
+        <div class="field-label">Payload</div>
+        {% if attack.payload %}
+          <div class="code-block">{{ attack.payload }}</div>
+        {% else %}
+          <div class="code-block empty">No payload recorded.</div>
+        {% endif %}
+      </div>
+
+      <div>
+        <div class="field-label">Evidence</div>
+        {% if attack.evidence %}
+          <div class="evidence-block">{{ attack.evidence }}</div>
+        {% else %}
+          <div class="evidence-block empty">No evidence recorded.</div>
+        {% endif %}
+      </div>
+
+      <div class="id-row">ID: {{ attack.id }}</div>
+
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

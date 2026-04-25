@@ -221,6 +221,7 @@
             <th>Status</th>
             <th>Payload</th>
             <th>Evidence</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -247,6 +248,9 @@
             <td class="payload" title="{{ a.payload }}">{{ a.payload }}</td>
             <td class="evidence" title="{{ a.evidence }}">
               {{ a.evidence[:160] }}{% if a.evidence|length > 160 %}&hellip;{% endif %}
+            </td>
+            <td style="white-space:nowrap;">
+              <a href="/attacks/{{ a.id }}" style="color:#58a6ff; font-size:.75rem; text-decoration:none;">Details →</a>
             </td>
           </tr>
           {% endfor %}
