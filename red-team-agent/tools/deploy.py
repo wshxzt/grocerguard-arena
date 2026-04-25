@@ -95,7 +95,7 @@ def deploy():
     if not url:
         return 'Deploy submitted but could not determine service URL'
 
-    logger.info(f'Polling {url}/healthz ...')
+    logger.info(f'Polling {url} ...')
     if _wait_healthy(url):
         logger.info('Service is live.')
         return f'Deployed. Service URL: {url}'

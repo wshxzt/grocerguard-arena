@@ -290,5 +290,9 @@ def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_prog
                 'tool_use_id': block.id,
                 'content': str(result),
             })
+            if block.name == 'deploy' and on_progress:
+                success = 'failed' not in str(result).lower() and 'error' not in str(result).lower()
+                icon = '✅' if success else '❌'
+                on_progress([{'type': 'text', 'text': f'{icon} Deploy result: {str(result)[:300]}'}])
 
         messages.append({'role': 'user', 'content': tool_results})
