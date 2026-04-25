@@ -1,4 +1,4 @@
-"""GrocerGuard Red Team Leaderboard — reads attack_log from Spanner."""
+"""GrocerGuard Arena Leaderboard."""
 import os
 from datetime import timezone
 from flask import Flask, render_template
@@ -26,29 +26,25 @@ def fetch_stats():
     with get_db().snapshot() as snap:
         row = snap.execute_sql(
             """SELECT
-                 COUNT(*) AS total,
-                 COUNTIF(status = 'confirmed')   AS confirmed,
-                 COUNTIF(status = 'unconfirmed') AS unconfirmed,
-                 COUNTIF(status = 'failed')       AS failed
+                 COUNT(*)                          AS total,
+                 COUNTIF(status = 'confirmed')     AS confirmed,
+                 COUNTIF(status = 'unconfirmed')   AS unconfirmed,
+                 COUNTIF(status = 'failed')        AS failed
                FROM attack_log"""
         ).one()
-    return {
-        'total':       row[0],
-        'confirmed':   row[1],
-        'unconfirmed': row[2],
-        'failed':      row[3],
-    }
+    return {'total': row[0], 'confirmed': row[1], 'unconfirmed': row[2], 'failed': row[3]}
 
 
 def fetch_attacks():
+    results = []
     with get_db().snapshot() as snap:
         rows = snap.execute_sql(
             """SELECT
                  a.attempted_at,
                  a.cwe_id,
-                 COALESCE(c.name,  '—')          AS cwe_name,
-                 COALESCE(c.rank,  0)             AS cwe_rank,
-                 COALESCE(c.score, 0.0)           AS cwe_score,
+                 COALESCE(c.name,  '—')   AS cwe_name,
+                 COALESCE(c.rank,  0)      AS cwe_rank,
+                 COALESCE(c.score, 0.0)    AS cwe_score,
                  a.status,
                  a.target_url,
                  a.payload,
@@ -57,13 +53,12 @@ def fetch_attacks():
                LEFT JOIN cwe_registry c USING (cwe_id)
                ORDER BY a.attempted_at DESC"""
         )
-        results = []
         for r in rows:
-            attempted_at = r[0]
-            if attempted_at and attempted_at.tzinfo is None:
-                attempted_at = attempted_at.replace(tzinfo=timezone.utc)
+            ts = r[0]
+            if ts and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
             results.append({
-                'attempted_at': attempted_at,
+                'attempted_at': ts,
                 'cwe_id':       r[1],
                 'cwe_name':     r[2],
                 'cwe_rank':     r[3],

@@ -3,84 +3,191 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>GrocerGuard Red Team Leaderboard</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <title>GrocerGuard Arena — Leaderboard</title>
   <style>
-    body { background: #0d1117; color: #e6edf3; }
-    .navbar-brand { font-weight: 700; letter-spacing: 0.04em; }
-    .stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.25rem 1.5rem; }
-    .stat-number { font-size: 2rem; font-weight: 700; line-height: 1; }
-    .stat-label  { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #8b949e; margin-top: 4px; }
-    .table-dark { --bs-table-bg: #161b22; --bs-table-border-color: #30363d; }
-    .table-dark th { color: #8b949e; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; border-bottom-color: #30363d; }
-    .table-dark td { font-size: 0.875rem; vertical-align: middle; }
-    .cwe-badge { font-family: monospace; font-size: 0.8rem; background: #21262d; color: #58a6ff; padding: 2px 7px; border-radius: 4px; }
-    .evidence-cell { color: #8b949e; font-size: 0.8rem; max-width: 280px; }
-    .payload-cell  { color: #8b949e; font-size: 0.8rem; max-width: 180px; font-family: monospace; }
-    .score-cell    { font-weight: 600; color: #f0883e; }
-    .rank-cell     { color: #8b949e; }
-    .empty-state   { color: #8b949e; padding: 3rem 0; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0d1117; color: #e6edf3; min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #161b22; border-bottom: 1px solid #30363d;
+      padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem;
+    }
+    header .logo { font-size: 1.1rem; font-weight: 700; letter-spacing: .02em; }
+    header .logo span { color: #f85149; }
+    header nav { margin-left: auto; display: flex; gap: 1.5rem; }
+    header nav a {
+      color: #8b949e; text-decoration: none; font-size: .85rem;
+      transition: color .15s;
+    }
+    header nav a:hover { color: #e6edf3; }
+
+    /* ── Layout ── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+    /* ── Section title ── */
+    .section-title {
+      font-size: .7rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .1em; color: #8b949e; margin-bottom: 1rem;
+    }
+
+    /* ── Score cards ── */
+    .teams { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 2rem; }
+    .team-card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+    }
+    .team-card.red  { border-top: 3px solid #f85149; }
+    .team-card.blue { border-top: 3px solid #58a6ff; }
+    .team-label {
+      font-size: .75rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .1em; margin-bottom: .75rem;
+    }
+    .team-card.red  .team-label { color: #f85149; }
+    .team-card.blue .team-label { color: #58a6ff; }
+    .team-score {
+      font-size: 3rem; font-weight: 700; line-height: 1;
+      margin-bottom: .25rem;
+    }
+    .team-card.red  .team-score { color: #f85149; }
+    .team-card.blue .team-score { color: #58a6ff; }
+    .team-sublabel { font-size: .8rem; color: #8b949e; }
+    .team-stats {
+      display: flex; gap: 1.5rem; margin-top: 1rem;
+      padding-top: 1rem; border-top: 1px solid #21262d;
+    }
+    .team-stat .val { font-size: 1.1rem; font-weight: 600; }
+    .team-stat .lbl { font-size: .7rem; color: #8b949e; text-transform: uppercase; letter-spacing: .06em; }
+    .coming-soon {
+      font-size: .8rem; color: #484f58; font-style: italic; margin-top: .5rem;
+    }
+
+    /* ── Attack log table ── */
+    .table-card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+      overflow: hidden;
+    }
+    .table-header {
+      padding: .85rem 1.25rem; border-bottom: 1px solid #30363d;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .table-header .title { font-size: .8rem; font-weight: 600; }
+    .table-header .count { font-size: .75rem; color: #8b949e; }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      font-size: .7rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .07em; color: #8b949e;
+      padding: .65rem 1rem; text-align: left;
+      border-bottom: 1px solid #30363d;
+    }
+    td {
+      font-size: .82rem; padding: .7rem 1rem;
+      border-bottom: 1px solid #21262d; vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1c2128; }
+
+    .cwe-chip {
+      display: inline-block; font-family: monospace; font-size: .78rem;
+      background: #21262d; color: #58a6ff;
+      padding: 2px 8px; border-radius: 4px; text-decoration: none;
+      white-space: nowrap;
+    }
+    .cwe-chip:hover { background: #2d333b; }
+    .score { font-weight: 600; color: #f0883e; }
+    .rank  { color: #8b949e; }
+    .ts    { color: #8b949e; white-space: nowrap; }
+    .evidence { color: #8b949e; font-size: .78rem; max-width: 260px; }
+    .payload  { color: #8b949e; font-size: .78rem; font-family: monospace; max-width: 160px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .badge {
+      display: inline-block; font-size: .7rem; font-weight: 600;
+      padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+    }
+    .badge-confirmed   { background: #1a4a1f; color: #3fb950; }
+    .badge-unconfirmed { background: #3d2f00; color: #d29922; }
+    .badge-failed      { background: #21262d; color: #8b949e; }
+
+    .empty {
+      text-align: center; padding: 3rem 1rem;
+      color: #484f58; font-size: .875rem;
+    }
+
+    @media (max-width: 640px) {
+      .teams { grid-template-columns: 1fr; }
+      header { padding: .75rem 1rem; }
+      .container { padding: 1.25rem 1rem; }
+    }
   </style>
 </head>
 <body>
 
-<nav class="navbar navbar-dark" style="background:#161b22; border-bottom:1px solid #30363d;">
-  <div class="container">
-    <span class="navbar-brand">
-      <span style="color:#f85149;">&#9888;</span>&nbsp; GrocerGuard Red Team Leaderboard
-    </span>
-    <span class="text-muted" style="font-size:0.8rem;">Live &mdash; refreshes on page load</span>
+<header>
+  <div class="logo"><span>&#9888;</span> GrocerGuard Arena</div>
+  <nav>
+    <a href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">App</a>
+    <a href="https://red-team-agent-929315648024.us-central1.run.app" target="_blank">Red Team Console</a>
+  </nav>
+</header>
+
+<div class="container">
+
+  <!-- Team scores -->
+  <p class="section-title">Scoreboard</p>
+  <div class="teams">
+
+    <div class="team-card red">
+      <div class="team-label">&#9658; Red Team</div>
+      <div class="team-score">{{ stats.confirmed }}</div>
+      <div class="team-sublabel">confirmed exploits</div>
+      <div class="team-stats">
+        <div class="team-stat">
+          <div class="val">{{ stats.total }}</div>
+          <div class="lbl">Attempts</div>
+        </div>
+        <div class="team-stat">
+          <div class="val">{{ stats.unconfirmed }}</div>
+          <div class="lbl">Unconfirmed</div>
+        </div>
+        <div class="team-stat">
+          <div class="val">{{ stats.failed }}</div>
+          <div class="lbl">Failed</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="team-card blue">
+      <div class="team-label">&#9650; Blue Team</div>
+      <div class="team-score" style="color:#484f58;">—</div>
+      <div class="team-sublabel">detections</div>
+      <div class="coming-soon">Blue team agent coming soon.</div>
+    </div>
+
   </div>
-</nav>
 
-<div class="container py-4">
-
-  <!-- Summary stats -->
-  <div class="row g-3 mb-4">
-    <div class="col-6 col-md-3">
-      <div class="stat-card">
-        <div class="stat-number">{{ stats.total }}</div>
-        <div class="stat-label">Total Attacks</div>
-      </div>
-    </div>
-    <div class="col-6 col-md-3">
-      <div class="stat-card">
-        <div class="stat-number" style="color:#3fb950;">{{ stats.confirmed }}</div>
-        <div class="stat-label">Confirmed</div>
-      </div>
-    </div>
-    <div class="col-6 col-md-3">
-      <div class="stat-card">
-        <div class="stat-number" style="color:#d29922;">{{ stats.unconfirmed }}</div>
-        <div class="stat-label">Unconfirmed</div>
-      </div>
-    </div>
-    <div class="col-6 col-md-3">
-      <div class="stat-card">
-        <div class="stat-number" style="color:#8b949e;">{{ stats.failed }}</div>
-        <div class="stat-label">Failed</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Attack log table -->
-  <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; overflow:hidden;">
-    <div class="px-3 pt-3 pb-2" style="border-bottom:1px solid #30363d;">
-      <h6 class="mb-0" style="color:#8b949e; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.08em;">Attack Log</h6>
+  <!-- Attack log -->
+  <p class="section-title" style="margin-top:2rem;">Red Team Attack Log</p>
+  <div class="table-card">
+    <div class="table-header">
+      <span class="title">All Attacks</span>
+      <span class="count">{{ attacks | length }} entries</span>
     </div>
 
     {% if attacks %}
-    <div class="table-responsive">
-      <table class="table table-dark table-hover mb-0">
+    <div style="overflow-x:auto;">
+      <table>
         <thead>
           <tr>
             <th>Time (UTC)</th>
             <th>CWE</th>
-            <th>Name</th>
+            <th>Vulnerability</th>
             <th>Rank</th>
             <th>Score</th>
             <th>Status</th>
-            <th>Target</th>
             <th>Payload</th>
             <th>Evidence</th>
           </tr>
@@ -88,33 +195,27 @@
         <tbody>
           {% for a in attacks %}
           <tr>
-            <td style="white-space:nowrap; color:#8b949e;">
-              {{ a.attempted_at.strftime('%Y-%m-%d %H:%M') if a.attempted_at else '—' }}
-            </td>
+            <td class="ts">{{ a.attempted_at.strftime('%Y-%m-%d %H:%M') if a.attempted_at else '—' }}</td>
             <td>
-              <a href="https://cwe.mitre.org/data/definitions/{{ a.cwe_id | replace('CWE-', '') }}.html"
-                 target="_blank" class="cwe-badge text-decoration-none">{{ a.cwe_id }}</a>
+              <a class="cwe-chip"
+                 href="https://cwe.mitre.org/data/definitions/{{ a.cwe_id | replace('CWE-','') }}.html"
+                 target="_blank">{{ a.cwe_id }}</a>
             </td>
-            <td>{{ a.cwe_name }}</td>
-            <td class="rank-cell">#{{ a.cwe_rank }}</td>
-            <td class="score-cell">{{ '%.1f' % a.cwe_score }}</td>
+            <td style="max-width:200px;">{{ a.cwe_name }}</td>
+            <td class="rank">#{{ a.cwe_rank }}</td>
+            <td class="score">{{ '%.1f' % a.cwe_score }}</td>
             <td>
               {% if a.status == 'confirmed' %}
-                <span class="badge" style="background:#1a4a1f; color:#3fb950;">confirmed</span>
+                <span class="badge badge-confirmed">confirmed</span>
               {% elif a.status == 'unconfirmed' %}
-                <span class="badge" style="background:#3d2f00; color:#d29922;">unconfirmed</span>
+                <span class="badge badge-unconfirmed">unconfirmed</span>
               {% else %}
-                <span class="badge" style="background:#21262d; color:#8b949e;">failed</span>
+                <span class="badge badge-failed">failed</span>
               {% endif %}
             </td>
-            <td style="font-size:0.8rem; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-              {{ a.target_url }}
-            </td>
-            <td class="payload-cell">
-              <span title="{{ a.payload }}">{{ a.payload[:80] }}{% if a.payload|length > 80 %}&hellip;{% endif %}</span>
-            </td>
-            <td class="evidence-cell">
-              <span title="{{ a.evidence }}">{{ a.evidence[:160] }}{% if a.evidence|length > 160 %}&hellip;{% endif %}</span>
+            <td class="payload" title="{{ a.payload }}">{{ a.payload }}</td>
+            <td class="evidence" title="{{ a.evidence }}">
+              {{ a.evidence[:160] }}{% if a.evidence|length > 160 %}&hellip;{% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -122,13 +223,10 @@
       </table>
     </div>
     {% else %}
-    <div class="text-center empty-state">
-      No attacks logged yet &mdash; the red team agent hasn't run.
-    </div>
+    <div class="empty">No attacks logged yet — the red team agent hasn't run.</div>
     {% endif %}
   </div>
 
 </div>
-
 </body>
 </html>
