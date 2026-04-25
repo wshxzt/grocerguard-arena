@@ -1,11 +1,15 @@
 """Red team agent service — accepts HTTP requests to trigger agent runs."""
 import os
+import json
 import logging
 import subprocess
 import threading
 import uuid
 
-from flask import Flask, request, jsonify
+import anthropic
+from flask import Flask, request, jsonify, render_template
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,6 +19,15 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=[],          # no blanket limit; apply per-route
+    storage_uri='memory://',
+)
+
+_anthropic = anthropic.Anthropic()
+
 REPO_URL      = os.environ.get('REPO_URL', 'https://github.com/wshxzt/grocerguard-arena.git')
 WORKSPACE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace/grocerguard-arena')
 API_KEY       = os.environ.get('AGENT_API_KEY', '')
@@ -22,24 +35,108 @@ API_KEY       = os.environ.get('AGENT_API_KEY', '')
 _runs: dict[str, dict] = {}
 _runs_lock = threading.Lock()
 
+# ── Claude chat ────────────────────────────────────────────────────────────────
 
-def _check_auth():
-    if not API_KEY:
-        return None
-    if request.headers.get('Authorization', '') != f'Bearer {API_KEY}':
-        return jsonify({'error': 'unauthorized'}), 401
-    return None
+_CHAT_SYSTEM = """You are the GrocerGuard Red Team assistant, running at the red-team-agent service.
+You help users manage automated security attacks against the GrocerGuard target application.
 
+You have two tools:
+- start_attack: trigger a red team run (inject a vulnerability, attack it, or both)
+- get_status: check the status of recent runs
+
+When the user asks to start / run / launch an attack, use start_attack.
+When the user asks about status, results, or what is happening, use get_status.
+For anything else, answer directly.
+
+Be concise. No markdown headers."""
+
+_CHAT_TOOLS = [
+    {
+        'name': 'start_attack',
+        'description': 'Trigger a red team attack run.',
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'mode': {
+                    'type': 'string',
+                    'enum': ['inject', 'attack', 'both'],
+                    'description': 'inject=code change + deploy only, attack=attack existing vuln, both=full pipeline',
+                },
+                'cwe_id':      {'type': 'string', 'description': 'Optional CWE to target, e.g. CWE-79.'},
+                'instructions':{'type': 'string', 'description': 'Specific guidance for the agent.'},
+            },
+            'required': ['mode'],
+        },
+    },
+    {
+        'name': 'get_status',
+        'description': 'Get status of recent attack runs.',
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'run_id': {'type': 'string', 'description': 'Optional run ID; omit for all recent runs.'},
+            },
+            'required': [],
+        },
+    },
+]
+
+
+def _call_tool(name, inputs):
+    if name == 'start_attack':
+        # Call ourselves internally
+        import db, cwe_pipeline
+        try:
+            cwe_pipeline.sync_cwes()
+        except Exception as e:
+            logger.warning(f'CWE sync: {e}')
+        cwe_id_override = inputs.get('cwe_id', '').strip()
+        if cwe_id_override:
+            cwe = db.get_cwe(cwe_id_override)
+            if not cwe:
+                return {'error': f'{cwe_id_override} not in registry'}
+        else:
+            cwe = db.get_next_cwe()
+            if not cwe:
+                return {'error': 'No applicable CWEs remaining'}
+
+        run_id = str(uuid.uuid4())
+        mode   = inputs.get('mode', 'both')
+        instructions = inputs.get('instructions', '')
+
+        with _runs_lock:
+            _runs[run_id] = {
+                'run_id': run_id, 'cwe_id': cwe['cwe_id'],
+                'cwe_name': cwe['name'], 'mode': mode,
+                'instructions': instructions, 'status': 'queued', 'detail': '',
+            }
+        threading.Thread(
+            target=_execute_run,
+            args=(run_id, cwe['cwe_id'], cwe['name'], cwe['score'], mode, instructions),
+            daemon=True,
+        ).start()
+        return {'run_id': run_id, 'cwe_id': cwe['cwe_id'], 'cwe_name': cwe['name'],
+                'mode': mode, 'status': 'queued'}
+
+    if name == 'get_status':
+        run_id = inputs.get('run_id', '').strip()
+        with _runs_lock:
+            if run_id:
+                return _runs.get(run_id, {'error': 'run not found'})
+            return list(reversed(list(_runs.values())))[-10:]  # last 10
+
+    return {'error': f'unknown tool: {name}'}
+
+
+# ── background run executor ────────────────────────────────────────────────────
 
 def setup_workspace():
     if os.path.isdir(os.path.join(WORKSPACE_DIR, '.git')):
-        logger.info('Pulling latest codebase')
         result = subprocess.run(
             ['git', '-C', WORKSPACE_DIR, 'pull', '--ff-only'],
             capture_output=True, text=True,
         )
     else:
-        logger.info(f'Cloning repo → {WORKSPACE_DIR}')
         os.makedirs(os.path.dirname(WORKSPACE_DIR), exist_ok=True)
         result = subprocess.run(
             ['git', 'clone', REPO_URL, WORKSPACE_DIR],
@@ -55,14 +152,10 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions):
             _runs[run_id]['status'] = status
             if detail:
                 _runs[run_id]['detail'] = detail
-
     try:
         update('setting_up')
         setup_workspace()
-
         update('running', f'{cwe_id} / mode={mode}')
-
-        # Import agent lazily so startup errors surface in request logs not at boot
         from agent import run_agent
         run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions)
         update('done')
@@ -71,9 +164,69 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions):
         update('error', str(e))
 
 
+# ── auth helper ───────────────────────────────────────────────────────────────
+
+def _check_auth():
+    if not API_KEY:
+        return None
+    if request.headers.get('Authorization', '') != f'Bearer {API_KEY}':
+        return jsonify({'error': 'unauthorized'}), 401
+    return None
+
+
+# ── routes ─────────────────────────────────────────────────────────────────────
+
 @app.route('/')
 def index():
-    return jsonify({'service': 'red-team-agent', 'status': 'ok'})
+    return render_template('index.html')
+
+
+@app.route('/chat', methods=['POST'])
+@limiter.limit('12 per minute')
+@limiter.limit('100 per hour')
+def chat():
+    data     = request.get_json(silent=True) or {}
+    user_msg = data.get('message', '').strip()
+    history  = data.get('history', [])
+
+    if not user_msg:
+        return jsonify({'error': 'empty message'}), 400
+
+    messages = history + [{'role': 'user', 'content': user_msg}]
+
+    while True:
+        response = _anthropic.messages.create(
+            model='claude-sonnet-4-6',
+            max_tokens=1024,
+            system=_CHAT_SYSTEM,
+            tools=_CHAT_TOOLS,
+            messages=messages,
+        )
+        messages.append({'role': 'assistant', 'content': response.content})
+
+        if response.stop_reason == 'end_turn':
+            text = next((b.text for b in response.content if hasattr(b, 'text')), '(no response)')
+            return jsonify({
+                'reply': text,
+                'history': [m for m in messages if isinstance(m.get('content'), str)],
+            })
+
+        if response.stop_reason != 'tool_use':
+            break
+
+        tool_results = []
+        for block in response.content:
+            if block.type != 'tool_use':
+                continue
+            result = _call_tool(block.name, block.input)
+            tool_results.append({
+                'type': 'tool_result',
+                'tool_use_id': block.id,
+                'content': json.dumps(result),
+            })
+        messages.append({'role': 'user', 'content': tool_results})
+
+    return jsonify({'reply': 'Something went wrong — please try again.', 'history': []})
 
 
 @app.route('/run', methods=['POST'])
@@ -90,9 +243,7 @@ def trigger_run():
     if mode not in ('inject', 'attack', 'both'):
         return jsonify({'error': 'mode must be inject | attack | both'}), 400
 
-    import db
-    import cwe_pipeline
-
+    import db, cwe_pipeline
     try:
         cwe_pipeline.sync_cwes()
     except Exception as e:
@@ -110,21 +261,14 @@ def trigger_run():
     run_id = str(uuid.uuid4())
     with _runs_lock:
         _runs[run_id] = {
-            'run_id':       run_id,
-            'cwe_id':       cwe['cwe_id'],
-            'cwe_name':     cwe['name'],
-            'mode':         mode,
-            'instructions': instructions,
-            'status':       'queued',
-            'detail':       '',
+            'run_id': run_id, 'cwe_id': cwe['cwe_id'], 'cwe_name': cwe['name'],
+            'mode': mode, 'instructions': instructions, 'status': 'queued', 'detail': '',
         }
-
-    thread = threading.Thread(
+    threading.Thread(
         target=_execute_run,
         args=(run_id, cwe['cwe_id'], cwe['name'], cwe['score'], mode, instructions),
         daemon=True,
-    )
-    thread.start()
+    ).start()
 
     logger.info(f'Run {run_id} started: {cwe["cwe_id"]} mode={mode}')
     return jsonify(_runs[run_id]), 202

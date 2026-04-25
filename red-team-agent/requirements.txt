@@ -1,5 +1,6 @@
 anthropic>=0.40.0
 flask>=3.0
+flask-limiter>=3.5
 google-cloud-spanner>=3.40
 gunicorn>=21.0
 requests>=2.31
