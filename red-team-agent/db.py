@@ -53,19 +53,17 @@ def get_cwe(cwe_id):
 
 
 def get_next_cwe():
-    db = get_db()
-    with db.snapshot() as snap:
-        tried = {r[0] for r in snap.execute_sql(
-            'SELECT DISTINCT cwe_id FROM attack_log'
-        )}
-        for row in snap.execute_sql(
+    with get_db().snapshot() as snap:
+        rows = list(snap.execute_sql(
             'SELECT cwe_id, name, rank, score FROM cwe_registry '
-            'WHERE applicable = TRUE ORDER BY score DESC'
-        ):
-            cwe_id, name, rank, score = row
-            if cwe_id not in tried:
-                return {'cwe_id': cwe_id, 'name': name, 'rank': rank, 'score': float(score)}
-    return None
+            'WHERE applicable = TRUE '
+            '  AND cwe_id NOT IN (SELECT DISTINCT cwe_id FROM attack_log) '
+            'ORDER BY score DESC LIMIT 1'
+        ))
+    if not rows:
+        return None
+    cwe_id, name, rank, score = rows[0]
+    return {'cwe_id': cwe_id, 'name': name, 'rank': rank, 'score': float(score)}
 
 
 def log_finding(cwe_id, target_url, payload, status, evidence):

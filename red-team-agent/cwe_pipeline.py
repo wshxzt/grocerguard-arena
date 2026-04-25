@@ -39,10 +39,17 @@ def sync_cwes():
                         headers={'User-Agent': 'GrocerGuard-RedTeam/1.0'})
     resp.raise_for_status()
 
-    soup  = BeautifulSoup(resp.text, 'html.parser')
-    table = soup.find('table')
+    soup = BeautifulSoup(resp.text, 'html.parser')
+
+    # The page has multiple tables; find the one that contains CWE-NNN anchor links
+    table = None
+    for t in soup.find_all('table'):
+        if t.find('a', href=lambda h: h and '/data/definitions/' in h):
+            table = t
+            break
+
     if not table:
-        logger.error('CWE table not found on page')
+        logger.error('CWE data table not found on page')
         return 0
 
     synced = 0

@@ -6,9 +6,6 @@ import threading
 import uuid
 
 from flask import Flask, request, jsonify
-import db
-import cwe_pipeline
-from agent import run_agent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,16 +19,14 @@ REPO_URL      = os.environ.get('REPO_URL', 'https://github.com/wshxzt/grocerguar
 WORKSPACE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace/grocerguard-arena')
 API_KEY       = os.environ.get('AGENT_API_KEY', '')
 
-# In-memory run registry (per-instance; good enough for single-instance job-like usage)
 _runs: dict[str, dict] = {}
 _runs_lock = threading.Lock()
 
 
 def _check_auth():
     if not API_KEY:
-        return None  # no key configured → open
-    auth = request.headers.get('Authorization', '')
-    if auth != f'Bearer {API_KEY}':
+        return None
+    if request.headers.get('Authorization', '') != f'Bearer {API_KEY}':
         return jsonify({'error': 'unauthorized'}), 401
     return None
 
@@ -66,11 +61,19 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions):
         setup_workspace()
 
         update('running', f'{cwe_id} / mode={mode}')
+
+        # Import agent lazily so startup errors surface in request logs not at boot
+        from agent import run_agent
         run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions)
         update('done')
     except Exception as e:
         logger.exception(f'Run {run_id} failed')
         update('error', str(e))
+
+
+@app.route('/')
+def index():
+    return jsonify({'service': 'red-team-agent', 'status': 'ok'})
 
 
 @app.route('/run', methods=['POST'])
@@ -87,7 +90,9 @@ def trigger_run():
     if mode not in ('inject', 'attack', 'both'):
         return jsonify({'error': 'mode must be inject | attack | both'}), 400
 
-    # Sync CWEs and pick target
+    import db
+    import cwe_pipeline
+
     try:
         cwe_pipeline.sync_cwes()
     except Exception as e:
