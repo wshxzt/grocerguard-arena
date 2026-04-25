@@ -1,8 +1,11 @@
-"""Entry point for the GrocerGuard red team agent Cloud Run Job."""
+"""Red team agent service — accepts HTTP requests to trigger agent runs."""
 import os
 import logging
 import subprocess
+import threading
+import uuid
 
+from flask import Flask, request, jsonify
 import db
 import cwe_pipeline
 from agent import run_agent
@@ -13,60 +16,140 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+app = Flask(__name__)
+
 REPO_URL      = os.environ.get('REPO_URL', 'https://github.com/wshxzt/grocerguard-arena.git')
 WORKSPACE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace/grocerguard-arena')
-CODEBASE_DIR  = os.environ.get('CODEBASE_DIR', '/workspace/grocerguard-arena/grocerguard-app')
+API_KEY       = os.environ.get('AGENT_API_KEY', '')
+
+# In-memory run registry (per-instance; good enough for single-instance job-like usage)
+_runs: dict[str, dict] = {}
+_runs_lock = threading.Lock()
+
+
+def _check_auth():
+    if not API_KEY:
+        return None  # no key configured → open
+    auth = request.headers.get('Authorization', '')
+    if auth != f'Bearer {API_KEY}':
+        return jsonify({'error': 'unauthorized'}), 401
+    return None
 
 
 def setup_workspace():
-    """Clone or update the GrocerGuard codebase into the workspace."""
     if os.path.isdir(os.path.join(WORKSPACE_DIR, '.git')):
-        logger.info('Workspace exists — pulling latest changes')
+        logger.info('Pulling latest codebase')
         result = subprocess.run(
             ['git', '-C', WORKSPACE_DIR, 'pull', '--ff-only'],
             capture_output=True, text=True,
         )
     else:
-        logger.info(f'Cloning {REPO_URL} → {WORKSPACE_DIR}')
+        logger.info(f'Cloning repo → {WORKSPACE_DIR}')
         os.makedirs(os.path.dirname(WORKSPACE_DIR), exist_ok=True)
         result = subprocess.run(
             ['git', 'clone', REPO_URL, WORKSPACE_DIR],
             capture_output=True, text=True,
         )
-
     if result.returncode != 0:
-        raise RuntimeError(f'Git workspace setup failed:\n{result.stderr}')
-
-    logger.info(f'Workspace ready at {WORKSPACE_DIR}')
+        raise RuntimeError(f'Git setup failed:\n{result.stderr}')
 
 
-def main():
-    logger.info('=== GrocerGuard Red Team Agent starting ===')
+def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions):
+    def update(status, detail=''):
+        with _runs_lock:
+            _runs[run_id]['status'] = status
+            if detail:
+                _runs[run_id]['detail'] = detail
 
-    # 1. Prepare the codebase
-    setup_workspace()
+    try:
+        update('setting_up')
+        setup_workspace()
 
-    # 2. Sync latest CWEs from MITRE
-    synced = cwe_pipeline.sync_cwes()
-    logger.info(f'CWE sync complete: {synced} entries')
+        update('running', f'{cwe_id} / mode={mode}')
+        run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions)
+        update('done')
+    except Exception as e:
+        logger.exception(f'Run {run_id} failed')
+        update('error', str(e))
 
-    # 3. Pick the next CWE to exploit
-    cwe = db.get_next_cwe()
-    if not cwe:
-        logger.info('No applicable CWEs remaining — nothing to do this run.')
-        return
 
-    cwe_id, cwe_name, cwe_score = cwe['cwe_id'], cwe['name'], cwe['score']
-    logger.info(f'Selected {cwe_id}: {cwe_name} (score={cwe_score})')
+@app.route('/run', methods=['POST'])
+def trigger_run():
+    err = _check_auth()
+    if err:
+        return err
 
-    # 4. Run the Claude agent (with optional instructions from env)
-    instructions = os.environ.get('AGENT_INSTRUCTIONS', '').strip()
-    if instructions:
-        logger.info(f'Agent instructions: {instructions}')
-    run_agent(cwe_id, cwe_name, cwe_score, instructions=instructions)
+    body         = request.get_json(silent=True) or {}
+    instructions = body.get('instructions', '').strip()
+    mode         = body.get('mode', 'both')
+    cwe_override = body.get('cwe_id', '').strip()
 
-    logger.info('=== Red Team Agent run complete ===')
+    if mode not in ('inject', 'attack', 'both'):
+        return jsonify({'error': 'mode must be inject | attack | both'}), 400
+
+    # Sync CWEs and pick target
+    try:
+        cwe_pipeline.sync_cwes()
+    except Exception as e:
+        logger.warning(f'CWE sync failed (non-fatal): {e}')
+
+    if cwe_override:
+        cwe = db.get_cwe(cwe_override)
+        if not cwe:
+            return jsonify({'error': f'CWE {cwe_override} not found in registry'}), 404
+    else:
+        cwe = db.get_next_cwe()
+        if not cwe:
+            return jsonify({'error': 'No applicable CWEs remaining'}), 409
+
+    run_id = str(uuid.uuid4())
+    with _runs_lock:
+        _runs[run_id] = {
+            'run_id':       run_id,
+            'cwe_id':       cwe['cwe_id'],
+            'cwe_name':     cwe['name'],
+            'mode':         mode,
+            'instructions': instructions,
+            'status':       'queued',
+            'detail':       '',
+        }
+
+    thread = threading.Thread(
+        target=_execute_run,
+        args=(run_id, cwe['cwe_id'], cwe['name'], cwe['score'], mode, instructions),
+        daemon=True,
+    )
+    thread.start()
+
+    logger.info(f'Run {run_id} started: {cwe["cwe_id"]} mode={mode}')
+    return jsonify(_runs[run_id]), 202
+
+
+@app.route('/runs', methods=['GET'])
+def list_runs():
+    err = _check_auth()
+    if err:
+        return err
+    with _runs_lock:
+        return jsonify(list(reversed(list(_runs.values()))))
+
+
+@app.route('/runs/<run_id>', methods=['GET'])
+def get_run(run_id):
+    err = _check_auth()
+    if err:
+        return err
+    with _runs_lock:
+        run = _runs.get(run_id)
+    if not run:
+        return jsonify({'error': 'run not found'}), 404
+    return jsonify(run)
+
+
+@app.route('/healthz')
+def healthz():
+    return 'ok', 200
 
 
 if __name__ == '__main__':
-    main()
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))

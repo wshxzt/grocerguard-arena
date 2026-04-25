@@ -10,15 +10,7 @@ logger = logging.getLogger(__name__)
 
 client = anthropic.Anthropic()
 
-SYSTEM = """You are an automated red team security agent for GrocerGuard, a Flask/Cloud Spanner grocery web app.
-
-Your mission each run:
-1. You will be given a CWE (Common Weakness Enumeration) to exploit.
-2. Read the GrocerGuard codebase to understand the relevant code paths.
-3. Inject a realistic, exploitable vulnerability matching the CWE into the codebase.
-4. Deploy the modified codebase to the grocerguard-redteam Cloud Run service.
-5. Attack the live service to confirm the vulnerability is exploitable.
-6. Log your findings with clear evidence.
+_SYSTEM_BASE = """You are an automated red team security agent for GrocerGuard, a Flask/Cloud Spanner grocery web app.
 
 Guidelines:
 - Make surgical changes — modify as few files as needed to introduce the vulnerability.
@@ -27,16 +19,26 @@ Guidelines:
 - Be specific in your evidence: include request payloads, response bodies, and what was leaked/achieved.
 - If deployment fails, read the error, fix the code, and retry once.
 - If the attack does not confirm the vulnerability after 3 attempts, log status=unconfirmed and stop.
-
-You have access to the following tools:
-- list_files: list all source files in the codebase
-- read_file: read a file's content
-- search_code: grep for a pattern across the codebase
-- write_file: write/overwrite a file with new content
-- deploy: build and deploy the modified codebase to grocerguard-redteam
-- http_request: make HTTP requests to the deployed service
-- log_finding: record the attack result to the database
 """
+
+_MODE_INSTRUCTIONS = {
+    'inject': (
+        'Mode: inject only.\n'
+        'Explore the codebase, inject the vulnerability, and deploy. '
+        'Do NOT perform any HTTP attacks after deployment. '
+        'Log your finding with status=confirmed and evidence describing what you injected and where.'
+    ),
+    'attack': (
+        'Mode: attack only.\n'
+        'The grocerguard-redteam service already has a vulnerability deployed — do NOT touch the codebase. '
+        'Skip list_files, read_file, write_file, search_code, and deploy. '
+        'Go straight to attacking the live service with http_request, then log your findings.'
+    ),
+    'both': (
+        'Mode: full pipeline.\n'
+        'Explore the codebase, inject the vulnerability, deploy, attack the live service, and log your findings.'
+    ),
+}
 
 TOOLS = [
     {
@@ -185,20 +187,20 @@ def dispatch_tool(name, inputs):
     return f'Unknown tool: {name}'
 
 
-def run_agent(cwe_id, cwe_name, cwe_score, instructions=''):
-    logger.info(f'Starting red team agent for {cwe_id}: {cwe_name} (score={cwe_score})')
+def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions=''):
+    logger.info(f'Starting agent: {cwe_id} ({cwe_name}), mode={mode}')
+
+    mode = mode if mode in _MODE_INSTRUCTIONS else 'both'
+    system = _SYSTEM_BASE + '\n' + _MODE_INSTRUCTIONS[mode]
 
     user_message = (
-        f'Your target vulnerability for this run:\n'
+        f'Target vulnerability:\n'
         f'  CWE ID:   {cwe_id}\n'
         f'  Name:     {cwe_name}\n'
-        f'  Score:    {cwe_score}\n\n'
-        f'Begin by exploring the codebase to find the best injection point. '
-        f'Then inject the vulnerability, deploy, attack, and log your findings.'
+        f'  Score:    {cwe_score}\n'
     )
-
     if instructions:
-        user_message += f'\n\nAdditional instructions:\n{instructions}'
+        user_message += f'\nAdditional instructions:\n{instructions}'
 
     messages = [{'role': 'user', 'content': user_message}]
 
@@ -207,13 +209,12 @@ def run_agent(cwe_id, cwe_name, cwe_score, instructions=''):
             model='claude-opus-4-7',
             max_tokens=8096,
             thinking={'type': 'adaptive'},
-            system=SYSTEM,
+            system=system,
             tools=TOOLS,
             messages=messages,
         )
         logger.info(f'Claude stop_reason={response.stop_reason}')
 
-        # Append assistant turn
         messages.append({'role': 'assistant', 'content': response.content})
 
         if response.stop_reason == 'end_turn':
@@ -224,7 +225,6 @@ def run_agent(cwe_id, cwe_name, cwe_score, instructions=''):
             logger.warning(f'Unexpected stop_reason: {response.stop_reason}')
             break
 
-        # Execute all tool calls and collect results
         tool_results = []
         for block in response.content:
             if block.type != 'tool_use':

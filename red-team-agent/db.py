@@ -39,6 +39,19 @@ def upsert_cwe(cwe_id, name, rank, score, rank_delta, applicable):
     ))
 
 
+def get_cwe(cwe_id):
+    with get_db().snapshot() as snap:
+        rows = list(snap.execute_sql(
+            'SELECT cwe_id, name, rank, score FROM cwe_registry WHERE cwe_id = @cwe_id',
+            params={'cwe_id': cwe_id},
+            param_types={'cwe_id': spanner.param_types.STRING},
+        ))
+    if not rows:
+        return None
+    cwe_id, name, rank, score = rows[0]
+    return {'cwe_id': cwe_id, 'name': name, 'rank': rank, 'score': float(score)}
+
+
 def get_next_cwe():
     db = get_db()
     with db.snapshot() as snap:
