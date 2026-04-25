@@ -146,3 +146,15 @@ def profile():
         flash('Profile updated.', 'success')
         return redirect(url_for('auth.profile'))
     return render_template('profile.html')
+
+
+@auth.route('/delete-account', methods=['POST'])
+@login_required
+def delete_account():
+    user = current_user._get_current_object()
+    db.session.delete(user)
+    db.session.commit()
+    logout_user()
+    session.pop('cart', None)
+    flash('Your account has been deleted.', 'info')
+    return redirect(url_for('auth.login'))

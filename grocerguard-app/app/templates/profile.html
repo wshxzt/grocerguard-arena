@@ -28,6 +28,36 @@
           <button type="submit" class="btn btn-primary">Save Changes</button>
         </form>
       </div>
+
+      <div class="card p-4 mt-4 border-danger">
+        <h5 class="text-danger mb-1">Danger Zone</h5>
+        <p class="text-muted small mb-3">Permanently delete your account and all associated data. This cannot be undone.</p>
+        <button class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteModal">
+          Delete Account
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Delete confirmation modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title text-danger">Delete Account</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to delete your account? This will permanently remove your profile and cannot be undone.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <form method="post" action="{{ url_for('auth.delete_account') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-danger">Yes, delete my account</button>
+        </form>
+      </div>
     </div>
   </div>
 </div>
