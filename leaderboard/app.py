@@ -1,8 +1,14 @@
 """GrocerGuard Arena Leaderboard."""
 import os
+import logging
 from datetime import timezone
+import requests as http
 from flask import Flask, render_template
 from google.cloud import spanner
+
+logger = logging.getLogger(__name__)
+
+AGENT_URL = os.environ.get('AGENT_URL', 'https://red-team-agent-hfzinwetfq-uc.a.run.app')
 
 app = Flask(__name__)
 
@@ -32,7 +38,34 @@ def fetch_stats():
                  COUNTIF(status = 'failed')        AS failed
                FROM attack_log"""
         ).one()
-    return {'total': row[0], 'confirmed': row[1], 'unconfirmed': row[2], 'failed': row[3]}
+    with get_db().snapshot() as snap:
+        deploy_row = snap.execute_sql(
+            'SELECT COUNT(*), COUNTIF(success = TRUE) FROM deploy_log'
+        ).one()
+    return {
+        'total':          row[0],
+        'confirmed':      row[1],
+        'unconfirmed':    row[2],
+        'failed':         row[3],
+        'deploy_total':   deploy_row[0],
+        'deploy_success': deploy_row[1],
+    }
+
+
+def fetch_live():
+    """Fetch in-progress run counts from the agent service. Returns zeros on failure."""
+    counts = {'queued': 0, 'setting_up': 0, 'running': 0, 'in_progress': 0}
+    try:
+        resp = http.get(f'{AGENT_URL}/runs', timeout=3)
+        resp.raise_for_status()
+        for run in resp.json():
+            s = run.get('status', '')
+            if s in counts:
+                counts[s] += 1
+        counts['in_progress'] = counts['setting_up'] + counts['running']
+    except Exception as e:
+        logger.warning(f'fetch_live failed: {e}')
+    return counts
 
 
 def fetch_attacks():
@@ -71,11 +104,53 @@ def fetch_attacks():
     return results
 
 
+def fetch_runs():
+    try:
+        resp = http.get(f'{AGENT_URL}/runs', timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.warning(f'fetch_runs failed: {e}')
+        return []
+
+
+def fetch_deploys():
+    results = []
+    with get_db().snapshot() as snap:
+        rows = snap.execute_sql(
+            'SELECT id, cwe_id, attempted_at, success, detail '
+            'FROM deploy_log ORDER BY attempted_at DESC'
+        )
+        for r in rows:
+            ts = r[2]
+            if ts and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            results.append({
+                'id':           r[0],
+                'cwe_id':       r[1],
+                'attempted_at': ts,
+                'success':      r[3],
+                'detail':       (r[4] or '')[:300],
+            })
+    return results
+
+
 @app.route('/')
 def index():
     stats   = fetch_stats()
+    live    = fetch_live()
     attacks = fetch_attacks()
-    return render_template('index.html', stats=stats, attacks=attacks)
+    return render_template('index.html', stats=stats, live=live, attacks=attacks)
+
+
+@app.route('/runs')
+def runs_page():
+    return render_template('runs.html', runs=fetch_runs())
+
+
+@app.route('/deploys')
+def deploys_page():
+    return render_template('deploys.html', deploys=fetch_deploys())
 
 
 @app.route('/healthz')

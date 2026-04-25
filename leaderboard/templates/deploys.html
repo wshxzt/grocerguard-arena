@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deploy Log — GrocerGuard Arena</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+
+    header {
+      background: #161b22; border-bottom: 1px solid #30363d;
+      padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem;
+    }
+    header .logo { font-size: 1.1rem; font-weight: 700; }
+    header .logo span { color: #f85149; }
+    header nav { margin-left: auto; display: flex; gap: 1.5rem; }
+    header nav a { color: #8b949e; text-decoration: none; font-size: .85rem; transition: color .15s; }
+    header nav a:hover { color: #e6edf3; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+    .section-title { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: #8b949e; margin-bottom: 1rem; }
+
+    .table-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; overflow: hidden; }
+    .table-header {
+      padding: .85rem 1.25rem; border-bottom: 1px solid #30363d;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .table-header .title { font-size: .8rem; font-weight: 600; }
+    .table-header .count { font-size: .75rem; color: #8b949e; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: #8b949e; padding: .65rem 1rem; text-align: left; border-bottom: 1px solid #30363d; }
+    td { font-size: .82rem; padding: .7rem 1rem; border-bottom: 1px solid #21262d; vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1c2128; }
+
+    .cwe-chip { display: inline-block; font-family: monospace; font-size: .78rem; background: #21262d; color: #58a6ff; padding: 2px 8px; border-radius: 4px; text-decoration: none; white-space: nowrap; }
+    .cwe-chip:hover { background: #2d333b; }
+    .ts { color: #8b949e; white-space: nowrap; }
+    .detail { color: #8b949e; font-size: .75rem; font-family: monospace; max-width: 500px; word-break: break-all; }
+
+    .badge { display: inline-block; font-size: .7rem; font-weight: 600; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+    .badge-success { background: #1a4a1f; color: #3fb950; }
+    .badge-failed  { background: #4a1a1a; color: #f85149; }
+
+    .empty { text-align: center; padding: 3rem 1rem; color: #484f58; font-size: .875rem; }
+
+    @media (max-width: 640px) {
+      header { padding: .75rem 1rem; }
+      .container { padding: 1.25rem 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>&#9888;</span> GrocerGuard Arena</div>
+  <nav>
+    <a href="/">Leaderboard</a>
+    <a href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">App</a>
+    <a href="https://red-team-agent-929315648024.us-central1.run.app" target="_blank">Red Team Console</a>
+  </nav>
+</header>
+
+<div class="container">
+  <p class="section-title">Vulnerability Deploy Log</p>
+  <div class="table-card">
+    <div class="table-header">
+      <span class="title">All Deploy Attempts</span>
+      <span class="count">{{ deploys | length }} entries</span>
+    </div>
+
+    {% if deploys %}
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>CWE</th>
+            <th>Result</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in deploys %}
+          <tr>
+            <td class="ts">{{ d.attempted_at.strftime('%Y-%m-%d %H:%M') if d.attempted_at else '—' }}</td>
+            <td>
+              <a class="cwe-chip"
+                 href="https://cwe.mitre.org/data/definitions/{{ d.cwe_id | replace('CWE-','') }}.html"
+                 target="_blank">{{ d.cwe_id }}</a>
+            </td>
+            <td>
+              {% if d.success %}
+                <span class="badge badge-success">success</span>
+              {% else %}
+                <span class="badge badge-failed">failed</span>
+              {% endif %}
+            </td>
+            <td class="detail" title="{{ d.detail }}">
+              {{ d.detail[:200] }}{% if d.detail | length > 200 %}&hellip;{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">No deploy attempts recorded yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+</body>
+</html>

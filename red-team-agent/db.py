@@ -74,3 +74,13 @@ def log_finding(cwe_id, target_url, payload, status, evidence):
             columns=['id', 'cwe_id', 'target_url', 'payload', 'status', 'evidence', 'attempted_at'],
             values=[(str(uuid.uuid4()), cwe_id, target_url, payload, status, evidence, now)]
         )
+
+
+def log_deploy(cwe_id, success, detail=''):
+    now = datetime.now(timezone.utc)
+    with get_db().batch() as batch:
+        batch.insert(
+            table='deploy_log',
+            columns=['id', 'cwe_id', 'attempted_at', 'success', 'detail'],
+            values=[(str(uuid.uuid4()), cwe_id, now, success, detail[:500])]
+        )

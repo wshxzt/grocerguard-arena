@@ -154,7 +154,18 @@ TOOLS = [
 ]
 
 
-def dispatch_tool(name, inputs):
+def _summarize_inputs(name, inputs):
+    """Compact display of tool inputs — omit large payloads."""
+    if name == 'write_file':
+        return {'path': inputs.get('path', ''), 'content': '[...]'}
+    if name == 'http_request':
+        return {'method': inputs.get('method', ''), 'url': inputs.get('url', '')}
+    if name == 'log_finding':
+        return {'cwe_id': inputs.get('cwe_id', ''), 'status': inputs.get('status', '')}
+    return {k: str(v)[:120] for k, v in inputs.items()}
+
+
+def dispatch_tool(name, inputs, cwe_id=None):
     logger.info(f'Tool call: {name}({list(inputs.keys())})')
     if name == 'list_files':
         return list_files(inputs.get('directory'))
@@ -165,7 +176,13 @@ def dispatch_tool(name, inputs):
     if name == 'write_file':
         return write_file(inputs['path'], inputs['content'])
     if name == 'deploy':
-        return deploy()
+        result = deploy()
+        success = 'failed' not in result.lower()
+        try:
+            db.log_deploy(cwe_id or '', success, result)
+        except Exception as e:
+            logger.warning(f'log_deploy failed: {e}')
+        return result
     if name == 'http_request':
         return str(http_request(
             method=inputs['method'],
@@ -187,7 +204,7 @@ def dispatch_tool(name, inputs):
     return f'Unknown tool: {name}'
 
 
-def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions=''):
+def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_progress=None):
     logger.info(f'Starting agent: {cwe_id} ({cwe_name}), mode={mode}')
 
     mode = mode if mode in _MODE_INSTRUCTIONS else 'both'
@@ -208,12 +225,29 @@ def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions=''):
         response = client.messages.create(
             model='claude-opus-4-7',
             max_tokens=8096,
-            thinking={'type': 'adaptive'},
+            thinking={'type': 'adaptive', 'display': 'summarized'},
             system=system,
             tools=TOOLS,
             messages=messages,
         )
         logger.info(f'Claude stop_reason={response.stop_reason}')
+
+        # Emit progress: thinking summaries, text, and tool calls from this turn
+        if on_progress:
+            steps = []
+            for block in response.content:
+                if block.type == 'thinking' and getattr(block, 'thinking', ''):
+                    steps.append({'type': 'thinking', 'text': block.thinking[:500]})
+                elif block.type == 'text' and getattr(block, 'text', ''):
+                    steps.append({'type': 'text', 'text': block.text[:300]})
+                elif block.type == 'tool_use':
+                    steps.append({
+                        'type': 'tool_call',
+                        'tool': block.name,
+                        'inputs': _summarize_inputs(block.name, block.input),
+                    })
+            if steps:
+                on_progress(steps)
 
         messages.append({'role': 'assistant', 'content': response.content})
 
@@ -229,7 +263,7 @@ def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions=''):
         for block in response.content:
             if block.type != 'tool_use':
                 continue
-            result = dispatch_tool(block.name, block.input)
+            result = dispatch_tool(block.name, block.input, cwe_id=cwe_id)
             tool_results.append({
                 'type': 'tool_result',
                 'tool_use_id': block.id,

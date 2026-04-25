@@ -73,6 +73,15 @@
     }
     #send-btn:disabled { opacity: .35; cursor: not-allowed; }
     .rate-error { color: #f85149; font-style: italic; }
+
+    /* ── status bubble ── */
+    .msg.system { align-self: center; max-width: 92%; }
+    .system .avatar { background: #21262d; color: #8b949e; font-size: .6rem; width: 36px; border-radius: 6px; }
+    .system .bubble {
+      background: #161b22; border: 1px solid #30363d;
+      border-left: 3px solid #f0883e; color: #8b949e;
+      font-size: .8rem; border-radius: 8px 8px 8px 0;
+    }
   </style>
 </head>
 <body>
@@ -162,6 +171,9 @@ async function send(preset) {
       } else {
         addMsg('assistant', data.reply);
         history = (data.history || []).filter(m => typeof m.content === 'string');
+        if (data.started_run_id) {
+          startPolling(data.started_run_id, data.started_run_info || {});
+        }
       }
     }
   } catch {
@@ -180,6 +192,74 @@ inputEl.addEventListener('input', () => {
 inputEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
+
+function addStatusBubble(text) {
+  const d = document.createElement('div');
+  d.className = 'msg system';
+  d.innerHTML = `<div class="avatar">RUN</div><div class="bubble">${esc(text)}</div>`;
+  msgsEl.appendChild(d);
+  msgsEl.scrollTop = msgsEl.scrollHeight;
+  return d;
+}
+
+function formatSteps(steps) {
+  if (!steps || !steps.length) return '';
+  const icons = { thinking: '🧠', text: '💬', tool_call: '🔧' };
+  return '\n\n' + steps.slice(-8).map(s => {
+    if (s.type === 'thinking') return `🧠 ${s.text}`;
+    if (s.type === 'text')    return `💬 ${s.text}`;
+    if (s.type === 'tool_call') {
+      const args = Object.entries(s.inputs || {})
+        .map(([k, v]) => `${k}=${v}`).join(', ');
+      return `🔧 ${s.tool}(${args})`;
+    }
+    return '';
+  }).filter(Boolean).join('\n');
+}
+
+function startPolling(runId, info) {
+  const label = info.cwe_id
+    ? `${info.cwe_id}${info.cwe_name ? ' — ' + info.cwe_name : ''} (${info.mode || 'both'})`
+    : runId.slice(0, 8) + '…';
+  const bubble = addStatusBubble('');
+  const bubbleEl = bubble.querySelector('.bubble');
+  const icons = { queued: '⏳', setting_up: '⚙️', running: '🔴', done: '✅', error: '❌' };
+  const startedAt = Date.now();
+  let cached = { status: 'queued', steps: [], detail: '' };
+
+  function elapsed() {
+    const s = Math.floor((Date.now() - startedAt) / 1000);
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  }
+
+  function render() {
+    const icon   = icons[cached.status] || '•';
+    const steps  = cached.steps || [];
+    const detail = cached.detail ? '\n' + cached.detail : '';
+    const meta   = `Status: ${cached.status}  ·  ${steps.length} steps  ·  ${elapsed()} elapsed`;
+    bubbleEl.textContent = `${icon} ${label}\n${meta}${detail}${formatSteps(steps)}`;
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  }
+
+  render();
+
+  // Clock: re-render every second for live elapsed time (no network)
+  const clockTimer = setInterval(render, 1000);
+
+  // Poll server every 5 seconds for status + step updates
+  const pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/runs/${runId}`);
+      if (!res.ok) return;
+      cached = await res.json();
+      render();
+      if (cached.status === 'done' || cached.status === 'error') {
+        clearInterval(pollTimer);
+        clearInterval(clockTimer);
+      }
+    } catch (_) { /* ignore network errors */ }
+  }, 5000);
+}
 </script>
 </body>
 </html>

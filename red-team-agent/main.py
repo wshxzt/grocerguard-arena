@@ -109,6 +109,7 @@ def _call_tool(name, inputs):
                 'run_id': run_id, 'cwe_id': cwe['cwe_id'],
                 'cwe_name': cwe['name'], 'mode': mode,
                 'instructions': instructions, 'status': 'queued', 'detail': '',
+                'steps': [], 'started_at': __import__('datetime').datetime.utcnow().isoformat() + 'Z',
             }
         threading.Thread(
             target=_execute_run,
@@ -152,12 +153,18 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions):
             _runs[run_id]['status'] = status
             if detail:
                 _runs[run_id]['detail'] = detail
+
+    def on_progress(steps):
+        with _runs_lock:
+            _runs[run_id]['steps'] = (_runs[run_id].get('steps', []) + steps)[-40:]
+
     try:
         update('setting_up')
         setup_workspace()
         update('running', f'{cwe_id} / mode={mode}')
         from agent import run_agent
-        run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions)
+        run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions,
+                  on_progress=on_progress)
         update('done')
     except Exception as e:
         logger.exception(f'Run {run_id} failed')
@@ -206,9 +213,29 @@ def chat():
 
         if response.stop_reason == 'end_turn':
             text = next((b.text for b in response.content if hasattr(b, 'text')), '(no response)')
+            started_run_id = None
+            started_run_info = {}
+            for m in messages:
+                content = m.get('content')
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get('type') == 'tool_result':
+                            try:
+                                result = json.loads(block.get('content', '{}'))
+                                if 'run_id' in result:
+                                    started_run_id = result['run_id']
+                                    started_run_info = {
+                                        'cwe_id':   result.get('cwe_id', ''),
+                                        'cwe_name': result.get('cwe_name', ''),
+                                        'mode':     result.get('mode', ''),
+                                    }
+                            except Exception:
+                                pass
             return jsonify({
                 'reply': text,
                 'history': [m for m in messages if isinstance(m.get('content'), str)],
+                'started_run_id':   started_run_id,
+                'started_run_info': started_run_info,
             })
 
         if response.stop_reason != 'tool_use':
@@ -263,6 +290,7 @@ def trigger_run():
         _runs[run_id] = {
             'run_id': run_id, 'cwe_id': cwe['cwe_id'], 'cwe_name': cwe['name'],
             'mode': mode, 'instructions': instructions, 'status': 'queued', 'detail': '',
+            'steps': [],
         }
     threading.Thread(
         target=_execute_run,

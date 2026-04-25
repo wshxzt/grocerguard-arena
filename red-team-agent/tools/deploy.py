@@ -15,26 +15,56 @@ CODEBASE_DIR = os.environ.get('CODEBASE_DIR', '/workspace/grocerguard-arena/groc
 
 
 def _run(cmd, timeout=300):
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    return result.returncode, result.stdout.strip(), result.stderr.strip()
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+    except subprocess.TimeoutExpired as e:
+        # Process is already killed by subprocess.run before re-raising.
+        # The GCP-side operation (build/deploy) may still be running.
+        out = e.stdout.decode(errors='replace').strip() if isinstance(e.stdout, bytes) else ''
+        return None, out, f'local command timed out after {timeout}s'
+
+
+def _get_service_url():
+    _, url, _ = _run([
+        'gcloud', 'run', 'services', 'describe', SERVICE,
+        '--region', REGION, '--project', PROJECT,
+        '--format', 'value(status.url)',
+    ], timeout=30)
+    return url.strip()
+
+
+def _wait_healthy(url, retries=36, interval=10):
+    for i in range(retries):
+        try:
+            r = requests.get(f'{url}/healthz', timeout=5)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            pass
+        logger.info(f'Health check {i+1}/{retries}: not ready yet')
+        time.sleep(interval)
+    return False
 
 
 def deploy():
     logger.info(f'Submitting Cloud Build from {CODEBASE_DIR}')
     code, out, err = _run(
-        ['gcloud', 'builds', 'submit', '--tag', IMAGE,
-         '--project', PROJECT, CODEBASE_DIR],
-        timeout=360
+        ['gcloud', 'builds', 'submit', '--tag', IMAGE, '--project', PROJECT, CODEBASE_DIR],
+        timeout=480,
     )
     if code != 0:
-        return f'Build failed:\n{err}'
+        # None means timed out — build may be running; treat as hard failure since we can't deploy without the image
+        return f'Build failed (code={code}):\n{err}'
     logger.info('Build succeeded. Deploying...')
 
-    spanner_project  = os.environ['SPANNER_PROJECT_ID']
-    spanner_instance = os.environ['SPANNER_INSTANCE_ID']
-    spanner_db       = os.environ.get('SPANNER_DATABASE_ID', 'grocerguard')
-    gcs_bucket       = os.environ.get('GCS_BUCKET_NAME', '')
-    base_url         = os.environ.get('REDTEAM_BASE_URL', '')
+    env_vars = (
+        f'SPANNER_PROJECT_ID={os.environ["SPANNER_PROJECT_ID"]},'
+        f'SPANNER_INSTANCE_ID={os.environ["SPANNER_INSTANCE_ID"]},'
+        f'SPANNER_DATABASE_ID={os.environ.get("SPANNER_DATABASE_ID", "grocerguard")},'
+        f'GCS_BUCKET_NAME={os.environ.get("GCS_BUCKET_NAME", "")},'
+        f'APP_BASE_URL={os.environ.get("REDTEAM_BASE_URL", "")}'
+    )
 
     code, out, err = _run([
         'gcloud', 'run', 'deploy', SERVICE,
@@ -42,34 +72,27 @@ def deploy():
         '--region', REGION,
         '--platform', 'managed',
         '--allow-unauthenticated',
-        '--set-env-vars',
-        (f'SPANNER_PROJECT_ID={spanner_project},'
-         f'SPANNER_INSTANCE_ID={spanner_instance},'
-         f'SPANNER_DATABASE_ID={spanner_db},'
-         f'GCS_BUCKET_NAME={gcs_bucket},'
-         f'APP_BASE_URL={base_url}'),
+        '--set-env-vars', env_vars,
         '--set-secrets', 'SECRET_KEY=grocerguard-secret-key:latest',
         '--project', PROJECT,
-    ], timeout=180)
-    if code != 0:
+    ], timeout=360)
+
+    if code is not None and code != 0:
         return f'Deploy failed:\n{err}'
 
-    # Get service URL
-    _, url, _ = _run([
-        'gcloud', 'run', 'services', 'describe', SERVICE,
-        '--region', REGION, '--project', PROJECT,
-        '--format', 'value(status.url)',
-    ])
+    if code is None:
+        # The local gcloud process was killed after 360s, but Cloud Run may have
+        # accepted the revision and is still rolling it out. Fall through and
+        # check health directly rather than aborting.
+        logger.warning('gcloud run deploy timed out locally — checking if service came up anyway')
 
-    # Poll until healthy
-    logger.info(f'Waiting for {url}/healthz ...')
-    for _ in range(24):
-        try:
-            if requests.get(f'{url}/healthz', timeout=5).status_code == 200:
-                logger.info('Service is live.')
-                return f'Deployed. Service URL: {url}'
-        except Exception:
-            pass
-        time.sleep(10)
+    url = _get_service_url()
+    if not url:
+        return 'Deploy submitted but could not determine service URL'
 
-    return f'Deployed but health check timed out. Service URL: {url}'
+    logger.info(f'Polling {url}/healthz ...')
+    if _wait_healthy(url):
+        logger.info('Service is live.')
+        return f'Deployed. Service URL: {url}'
+
+    return f'Deploy submitted but health check timed out. Service URL: {url}'
