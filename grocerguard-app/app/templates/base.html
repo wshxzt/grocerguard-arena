@@ -49,6 +49,7 @@
               <li><a class="dropdown-item" href="{{ url_for('auth.profile') }}"><i class="bi bi-person me-1"></i>Profile</a></li>
               {% if current_user.is_admin %}
               <li><a class="dropdown-item" href="{{ url_for('admin.dashboard') }}"><i class="bi bi-speedometer2 me-1"></i>Admin</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('chat.index') }}"><i class="bi bi-shield-exclamation me-1"></i>Security Console</a></li>
               {% endif %}
               <li><hr class="dropdown-divider"></li>
               <li>

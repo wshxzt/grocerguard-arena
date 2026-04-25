@@ -36,3 +36,6 @@ class Config:
 
     # Base URL used in password-reset links (set to Cloud Run URL in production)
     APP_BASE_URL = os.environ.get('APP_BASE_URL', 'http://localhost:5000')
+
+    # Red team agent service URL
+    REDTEAM_AGENT_URL = os.environ.get('REDTEAM_AGENT_URL', '')

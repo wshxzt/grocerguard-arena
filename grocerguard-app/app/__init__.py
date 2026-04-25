@@ -35,11 +35,13 @@ def create_app(config_class=Config):
     from app.routes.products import products
     from app.routes.orders import orders
     from app.routes.admin import admin
+    from app.routes.chat import chat
 
     app.register_blueprint(auth)
     app.register_blueprint(products)
     app.register_blueprint(orders)
     app.register_blueprint(admin)
+    app.register_blueprint(chat)
 
     @app.route('/healthz')
     def health():
