@@ -34,6 +34,7 @@ API_KEY       = os.environ.get('AGENT_API_KEY', '')
 
 _runs: dict[str, dict] = {}
 _runs_lock = threading.Lock()
+_run_reply_events: dict[str, threading.Event] = {}
 
 # ── Claude chat ────────────────────────────────────────────────────────────────
 
@@ -109,7 +110,8 @@ def _call_tool(name, inputs):
                 'run_id': run_id, 'cwe_id': cwe['cwe_id'],
                 'cwe_name': cwe['name'], 'mode': mode,
                 'instructions': instructions, 'status': 'queued', 'detail': '',
-                'steps': [], 'started_at': __import__('datetime').datetime.utcnow().isoformat() + 'Z',
+                'steps': [], 'pending_question': None,
+                'started_at': __import__('datetime').datetime.utcnow().isoformat() + 'Z',
             }
         threading.Thread(
             target=_execute_run,
@@ -158,17 +160,37 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions):
         with _runs_lock:
             _runs[run_id]['steps'] = (_runs[run_id].get('steps', []) + steps)[-40:]
 
+    reply_event = threading.Event()
+    with _runs_lock:
+        _run_reply_events[run_id] = reply_event
+
+    def on_ask_user(question):
+        reply_event.clear()
+        with _runs_lock:
+            _runs[run_id]['pending_question'] = question
+            _runs[run_id]['status'] = 'waiting'
+        logger.info(f'Run {run_id} waiting for user input: {question[:80]}')
+        reply_event.wait()
+        with _runs_lock:
+            reply = _runs[run_id].pop('pending_reply', '')
+            _runs[run_id]['pending_question'] = None
+            _runs[run_id]['status'] = 'running'
+        logger.info(f'Run {run_id} got user reply: {reply[:80]}')
+        return reply
+
     try:
         update('setting_up')
         setup_workspace()
         update('running', f'{cwe_id} / mode={mode}')
         from agent import run_agent
         run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions,
-                  on_progress=on_progress)
+                  on_progress=on_progress, on_ask_user=on_ask_user)
         update('done')
     except Exception as e:
         logger.exception(f'Run {run_id} failed')
         update('error', str(e))
+    finally:
+        _run_reply_events.pop(run_id, None)
 
 
 # ── auth helper ───────────────────────────────────────────────────────────────
@@ -290,7 +312,7 @@ def trigger_run():
         _runs[run_id] = {
             'run_id': run_id, 'cwe_id': cwe['cwe_id'], 'cwe_name': cwe['name'],
             'mode': mode, 'instructions': instructions, 'status': 'queued', 'detail': '',
-            'steps': [],
+            'steps': [], 'pending_question': None,
         }
     threading.Thread(
         target=_execute_run,
@@ -320,7 +342,24 @@ def get_run(run_id):
         run = _runs.get(run_id)
     if not run:
         return jsonify({'error': 'run not found'}), 404
-    return jsonify(run)
+    return jsonify({k: v for k, v in run.items() if not k.startswith('_')})
+
+
+@app.route('/runs/<run_id>/reply', methods=['POST'])
+def reply_run(run_id):
+    body = request.get_json(silent=True) or {}
+    reply = body.get('reply', '').strip()
+    with _runs_lock:
+        run = _runs.get(run_id)
+        if not run:
+            return jsonify({'error': 'run not found'}), 404
+        if not run.get('pending_question'):
+            return jsonify({'error': 'run is not waiting for input'}), 400
+        run['pending_reply'] = reply
+    event = _run_reply_events.get(run_id)
+    if event:
+        event.set()
+    return jsonify({'ok': True})
 
 
 @app.route('/healthz')

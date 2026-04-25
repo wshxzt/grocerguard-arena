@@ -18,7 +18,8 @@ Guidelines:
 - After deploying, confirm exploitation with actual HTTP requests to the service.
 - Be specific in your evidence: include request payloads, response bodies, and what was leaked/achieved.
 - If deployment fails, read the error, fix the code, and retry once.
-- If the attack does not confirm the vulnerability after 3 attempts, log status=unconfirmed and stop.
+- If you are stuck after retrying (repeated deploy failures, ambiguous results, missing information), call ask_user to pause and get human guidance rather than giving up.
+- If the attack does not confirm the vulnerability after 3 attempts, call ask_user before logging status=unconfirmed.
 """
 
 _MODE_INSTRUCTIONS = {
@@ -133,6 +134,21 @@ TOOLS = [
         },
     },
     {
+        'name': 'ask_user',
+        'description': (
+            'Pause the run and ask the human operator a question. '
+            'Use when you are blocked and cannot proceed without guidance — '
+            'e.g. repeated deploy failures, ambiguous vulnerability location, or attack not working after retries.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'question': {'type': 'string', 'description': 'The question to ask the operator.'},
+            },
+            'required': ['question'],
+        },
+    },
+    {
         'name': 'log_finding',
         'description': 'Record the attack result to the database.',
         'input_schema': {
@@ -165,7 +181,7 @@ def _summarize_inputs(name, inputs):
     return {k: str(v)[:120] for k, v in inputs.items()}
 
 
-def dispatch_tool(name, inputs, cwe_id=None):
+def dispatch_tool(name, inputs, cwe_id=None, on_ask_user=None):
     logger.info(f'Tool call: {name}({list(inputs.keys())})')
     if name == 'list_files':
         return list_files(inputs.get('directory'))
@@ -192,6 +208,11 @@ def dispatch_tool(name, inputs, cwe_id=None):
             cookies=inputs.get('cookies'),
             follow_redirects=inputs.get('follow_redirects', True),
         ))
+    if name == 'ask_user':
+        question = inputs.get('question', '')
+        if on_ask_user:
+            return on_ask_user(question)
+        return 'No operator available — continue with your best judgment.'
     if name == 'log_finding':
         db.log_finding(
             cwe_id=inputs['cwe_id'],
@@ -204,7 +225,7 @@ def dispatch_tool(name, inputs, cwe_id=None):
     return f'Unknown tool: {name}'
 
 
-def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_progress=None):
+def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_progress=None, on_ask_user=None):
     logger.info(f'Starting agent: {cwe_id} ({cwe_name}), mode={mode}')
 
     mode = mode if mode in _MODE_INSTRUCTIONS else 'both'
@@ -263,7 +284,7 @@ def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_prog
         for block in response.content:
             if block.type != 'tool_use':
                 continue
-            result = dispatch_tool(block.name, block.input, cwe_id=cwe_id)
+            result = dispatch_tool(block.name, block.input, cwe_id=cwe_id, on_ask_user=on_ask_user)
             tool_results.append({
                 'type': 'tool_result',
                 'tool_use_id': block.id,

@@ -82,6 +82,21 @@
       border-left: 3px solid #f0883e; color: #8b949e;
       font-size: .8rem; border-radius: 8px 8px 8px 0;
     }
+    .system.waiting .bubble { border-left-color: #d29922; }
+    .ask-box { margin-top: .75rem; padding-top: .65rem; border-top: 1px solid #30363d; }
+    .ask-q { color: #e6edf3; font-size: .82rem; margin-bottom: .5rem; white-space: pre-wrap; }
+    .ask-row { display: flex; gap: .4rem; }
+    .ask-input {
+      flex: 1; background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+      color: #e6edf3; padding: .4rem .7rem; font-size: .8rem; outline: none; font-family: inherit;
+    }
+    .ask-input:focus { border-color: #d29922; }
+    .ask-btn {
+      background: #d29922; border: none; border-radius: 8px;
+      color: #0d1117; padding: .4rem .85rem; cursor: pointer; font-size: .8rem; font-weight: 600;
+    }
+    .ask-btn:hover { background: #e3b341; }
+    .ask-btn:disabled { opacity: .4; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -193,6 +208,14 @@ inputEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 
+msgsEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.classList.contains('ask-input')) {
+    e.preventDefault();
+    const runId = e.target.id.replace('ask-', '');
+    replyRun(runId);
+  }
+});
+
 function addStatusBubble(text) {
   const d = document.createElement('div');
   d.className = 'msg system';
@@ -215,6 +238,22 @@ function formatSteps(steps) {
     }
     return '';
   }).filter(Boolean).join('\n');
+}
+
+async function replyRun(runId) {
+  const input = document.getElementById(`ask-${runId}`);
+  const btn   = document.getElementById(`ask-btn-${runId}`);
+  const reply = input?.value.trim();
+  if (!reply) return;
+  if (btn) btn.disabled = true;
+  if (input) input.disabled = true;
+  try {
+    await fetch(`/runs/${runId}/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reply }),
+    });
+  } catch (_) {}
 }
 
 function startPolling(runId, info) {
@@ -244,7 +283,22 @@ function startPolling(runId, info) {
     const steps  = cached.steps || [];
     const detail = cached.detail ? '\n' + cached.detail : '';
     const meta   = `${elapsed()} elapsed  ·  ${steps.length} steps  ·  synced ${polledAgo()}`;
-    bubbleEl.textContent = `${icon} ${label}  [${cached.status}]\n${meta}${detail}${formatSteps(steps)}`;
+    const statusText = `${icon} ${label}  [${cached.status}]\n${meta}${detail}${formatSteps(steps)}`;
+
+    let html = `<span style="white-space:pre-wrap;word-break:break-word">${esc(statusText)}</span>`;
+    if (cached.pending_question && cached.status === 'waiting') {
+      bubble.classList.add('waiting');
+      html += `<div class="ask-box">
+        <div class="ask-q">❓ ${esc(cached.pending_question)}</div>
+        <div class="ask-row">
+          <input id="ask-${runId}" class="ask-input" placeholder="Type your response…">
+          <button class="ask-btn" id="ask-btn-${runId}" onclick="replyRun('${runId}')">Send</button>
+        </div>
+      </div>`;
+    } else {
+      bubble.classList.remove('waiting');
+    }
+    bubbleEl.innerHTML = html;
     // Only auto-scroll if user is already near the bottom
     if (msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120) {
       msgsEl.scrollTop = msgsEl.scrollHeight;
