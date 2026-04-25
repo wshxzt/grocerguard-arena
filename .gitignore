@@ -1,5 +1,5 @@
 # Local SQLite database (use Spanner in production)
-instance/
+**/instance/
 
 # Environment secrets
 .env
