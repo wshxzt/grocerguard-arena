@@ -2,8 +2,10 @@
 import os
 import json
 import logging
+import random
 import subprocess
 import threading
+import time
 import uuid
 
 import anthropic
@@ -149,7 +151,7 @@ def setup_workspace():
         raise RuntimeError(f'Git setup failed:\n{result.stderr}')
 
 
-def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions):
+def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions, jitter_seconds=0):
     def update(status, detail=''):
         with _runs_lock:
             _runs[run_id]['status'] = status
@@ -179,6 +181,13 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions):
         return reply
 
     try:
+        if jitter_seconds > 0:
+            delay = random.randint(0, jitter_seconds)
+            if delay > 0:
+                mins, secs = divmod(delay, 60)
+                update('queued', f'scheduled — starting in {mins}m {secs}s')
+                logger.info(f'Run {run_id} jitter delay: {delay}s')
+                time.sleep(delay)
         update('setting_up')
         setup_workspace()
         update('running', f'{cwe_id} / mode={mode}')
@@ -284,10 +293,11 @@ def trigger_run():
     if err:
         return err
 
-    body         = request.get_json(silent=True) or {}
-    instructions = body.get('instructions', '').strip()
-    mode         = body.get('mode', 'both')
-    cwe_override = body.get('cwe_id', '').strip()
+    body           = request.get_json(silent=True) or {}
+    instructions   = body.get('instructions', '').strip()
+    mode           = body.get('mode', 'both')
+    cwe_override   = body.get('cwe_id', '').strip()
+    jitter_minutes = int(body.get('jitter_minutes', 0))
 
     if mode not in ('inject', 'attack', 'both'):
         return jsonify({'error': 'mode must be inject | attack | both'}), 400
@@ -317,10 +327,11 @@ def trigger_run():
     threading.Thread(
         target=_execute_run,
         args=(run_id, cwe['cwe_id'], cwe['name'], cwe['score'], mode, instructions),
+        kwargs={'jitter_seconds': jitter_minutes * 60},
         daemon=True,
     ).start()
 
-    logger.info(f'Run {run_id} started: {cwe["cwe_id"]} mode={mode}')
+    logger.info(f'Run {run_id} started: {cwe["cwe_id"]} mode={mode} jitter={jitter_minutes}m')
     return jsonify(_runs[run_id]), 202
 
 
