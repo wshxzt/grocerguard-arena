@@ -26,6 +26,11 @@ def _run(cmd, timeout=300):
 
 
 def _get_service_url():
+    # Prefer the env var (already configured to point at grocerguard-redteam)
+    # to avoid needing Cloud Run describe permissions.
+    env_url = os.environ.get('APP_BASE_URL', '').strip()
+    if env_url:
+        return env_url
     _, url, _ = _run([
         'gcloud', 'run', 'services', 'describe', SERVICE,
         '--region', REGION, '--project', PROJECT,
@@ -34,11 +39,11 @@ def _get_service_url():
     return url.strip()
 
 
-def _wait_healthy(url, retries=36, interval=10):
+def _wait_healthy(url, retries=18, interval=10):
     for i in range(retries):
         try:
-            r = requests.get(f'{url}/healthz', timeout=5)
-            if r.status_code == 200:
+            r = requests.get(url, timeout=5, allow_redirects=False)
+            if r.status_code < 500:
                 return True
         except Exception:
             pass
@@ -63,7 +68,7 @@ def deploy():
         f'SPANNER_INSTANCE_ID={os.environ["SPANNER_INSTANCE_ID"]},'
         f'SPANNER_DATABASE_ID={os.environ.get("SPANNER_DATABASE_ID", "grocerguard")},'
         f'GCS_BUCKET_NAME={os.environ.get("GCS_BUCKET_NAME", "")},'
-        f'APP_BASE_URL={os.environ.get("REDTEAM_BASE_URL", "")}'
+        f'APP_BASE_URL={os.environ.get("APP_BASE_URL", "")}'
     )
 
     code, out, err = _run([

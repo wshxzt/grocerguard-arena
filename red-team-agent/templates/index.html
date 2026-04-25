@@ -225,6 +225,7 @@ function startPolling(runId, info) {
   const bubbleEl = bubble.querySelector('.bubble');
   const icons = { queued: '⏳', setting_up: '⚙️', running: '🔴', done: '✅', error: '❌' };
   const startedAt = Date.now();
+  let lastPolled = null;
   let cached = { status: 'queued', steps: [], detail: '' };
 
   function elapsed() {
@@ -232,33 +233,43 @@ function startPolling(runId, info) {
     return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
   }
 
+  function polledAgo() {
+    if (!lastPolled) return 'connecting…';
+    const s = Math.floor((Date.now() - lastPolled) / 1000);
+    return s < 2 ? 'just now' : `${s}s ago`;
+  }
+
   function render() {
     const icon   = icons[cached.status] || '•';
     const steps  = cached.steps || [];
     const detail = cached.detail ? '\n' + cached.detail : '';
-    const meta   = `Status: ${cached.status}  ·  ${steps.length} steps  ·  ${elapsed()} elapsed`;
-    bubbleEl.textContent = `${icon} ${label}\n${meta}${detail}${formatSteps(steps)}`;
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    const meta   = `${elapsed()} elapsed  ·  ${steps.length} steps  ·  synced ${polledAgo()}`;
+    bubbleEl.textContent = `${icon} ${label}  [${cached.status}]\n${meta}${detail}${formatSteps(steps)}`;
+    // Only auto-scroll if user is already near the bottom
+    if (msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120) {
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+    }
   }
 
   render();
 
-  // Clock: re-render every second for live elapsed time (no network)
+  // Clock: re-render every second for live elapsed time + "synced Xs ago"
   const clockTimer = setInterval(render, 1000);
 
-  // Poll server every 5 seconds for status + step updates
+  // Poll server every 3 seconds for status + step updates
   const pollTimer = setInterval(async () => {
     try {
       const res = await fetch(`/runs/${runId}`);
       if (!res.ok) return;
       cached = await res.json();
+      lastPolled = Date.now();
       render();
       if (cached.status === 'done' || cached.status === 'error') {
         clearInterval(pollTimer);
         clearInterval(clockTimer);
       }
     } catch (_) { /* ignore network errors */ }
-  }, 5000);
+  }, 3000);
 }
 </script>
 </body>
