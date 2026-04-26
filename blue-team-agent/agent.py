@@ -4,7 +4,6 @@ import logging
 from typing import Optional
 
 from google.adk.agents import Agent
-from google.adk.tools import tool
 
 import db
 from tools.codebase import list_files as _list_files, read_file as _read_file, write_file as _write_file, search_code as _search_code
@@ -23,27 +22,22 @@ Guidelines:
 - Once you verify the patch, call log_defense to record your success.
 """
 
-@tool
 def list_files(directory: str = "") -> str:
     """List all source files in the GrocerGuard codebase. Pass empty string to list from root."""
     return _list_files(directory if directory else None)
 
-@tool
 def read_file(path: str) -> str:
     """Read the full content of a file in the codebase."""
     return _read_file(path)
 
-@tool
 def search_code(pattern: str, directory: str = "") -> str:
     """Search (grep) for a pattern across .py and .html files."""
     return _search_code(pattern, directory if directory else None)
 
-@tool
 def write_file(path: str, content: str) -> str:
     """Write (overwrite) a file in the codebase with new content."""
     return _write_file(path, content)
 
-@tool
 def deploy() -> str:
     """Build the modified codebase and deploy it to the grocerguard-redteam Cloud Run service. Returns the service URL or an error message."""
     result = _deploy()
@@ -54,7 +48,6 @@ def deploy() -> str:
         logger.warning(f'log_deploy failed: {e}')
     return result
 
-@tool
 def http_request(method: str, url: str, body: str = "") -> str:
     """Make an HTTP request to the deployed service or any URL to verify the fix. Set body to empty string if not needed."""
     return str(_http_request(
@@ -64,12 +57,10 @@ def http_request(method: str, url: str, body: str = "") -> str:
         follow_redirects=True,
     ))
 
-@tool
 def get_recent_attacks(limit: int = 5) -> str:
     """Fetch recent attacks performed by the red team, including their exploit payloads and target URLs, so you can test if your patch works."""
     return str(db.get_recent_attacks(limit=limit))
 
-@tool
 def log_defense(attack_id: str, target_url: str, fixed: bool, evidence: str) -> str:
     """Record the defense result to the database. Set attack_id to empty string if unknown."""
     db.log_defense(

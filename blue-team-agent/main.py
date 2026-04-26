@@ -11,7 +11,6 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 from google.adk.agents import Agent
-from google.adk.tools import tool
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,7 +44,6 @@ When the user asks about status or results, use get_status.
 For anything else, answer directly and help them troubleshoot.
 """
 
-@tool
 def trigger_scan(instructions: str = "") -> str:
     """Trigger a manual blue team defense scan. Pass instructions for the agent if requested."""
     run_id = str(uuid.uuid4())
@@ -68,7 +66,6 @@ def trigger_scan(instructions: str = "") -> str:
     ).start()
     return f'{{"run_id": "{run_id}", "status": "queued"}}'
 
-@tool
 def get_status(run_id: str = "") -> str:
     """Get status of recent blue team runs. Optionally provide a run_id to get specific status."""
     with _runs_lock:
