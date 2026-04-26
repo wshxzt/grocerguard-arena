@@ -214,6 +214,7 @@ def fetch_deploys():
     return results
 
 
+
 @app.route('/')
 def index():
     stats   = fetch_stats()
@@ -243,6 +244,7 @@ def runs_page():
 @app.route('/deploys')
 def deploys_page():
     return render_template('deploys.html', deploys=fetch_deploys())
+
 
 
 @app.route('/healthz')
