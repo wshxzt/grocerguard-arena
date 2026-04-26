@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Defenses — GrocerGuard Arena</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+
+    header {
+      background: #161b22; border-bottom: 1px solid #30363d;
+      padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem;
+    }
+    header .logo { font-size: 1.1rem; font-weight: 700; }
+    header .logo span { color: #58a6ff; }
+    header nav { margin-left: auto; display: flex; gap: 1.5rem; }
+    header nav a { color: #8b949e; text-decoration: none; font-size: .85rem; transition: color .15s; }
+    header nav a:hover { color: #e6edf3; }
+
+    .container { max-width: 1000px; margin: 0 auto; padding: 2rem 1.5rem; }
+    .section-title { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: #8b949e; margin-bottom: 1.25rem; }
+
+    .defense-card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+      border-left: 4px solid #58a6ff;
+      margin-bottom: 1.5rem; overflow: hidden;
+    }
+    .defense-header {
+      padding: .9rem 1.25rem; border-bottom: 1px solid #30363d;
+      display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+    }
+    .defense-attack-id {
+      font-family: monospace; font-size: .82rem;
+      background: #21262d; color: #58a6ff;
+      padding: 3px 10px; border-radius: 4px; text-decoration: none; white-space: nowrap;
+    }
+    .defense-name { font-weight: 600; font-size: .95rem; }
+    .defense-meta { margin-left: auto; display: flex; gap: 1rem; align-items: center; }
+    .meta-item { font-size: .75rem; color: #8b949e; }
+    .badge-fixed { display:inline-block; font-size:.7rem; font-weight:600; padding:2px 8px; border-radius:4px; background:#1a4a1f; color:#3fb950; }
+    .badge-failed { display:inline-block; font-size:.7rem; font-weight:600; padding:2px 8px; border-radius:4px; background:#3d2f00; color:#d29922; }
+
+    .defense-body { padding: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem; }
+
+    .field-label {
+      font-size: .68rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .08em; color: #8b949e; margin-bottom: .4rem;
+    }
+    .field-value { font-size: .85rem; line-height: 1.6; color: #c9d1d9; word-break: break-word; }
+
+    .url-link { color: #58a6ff; text-decoration: none; font-family: monospace; font-size: .82rem; }
+    .url-link:hover { text-decoration: underline; }
+
+    .evidence-block {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: .75rem 1rem; font-size: .8rem; line-height: 1.7;
+      color: #8b949e; white-space: pre-wrap; word-break: break-word;
+      max-height: 320px; overflow-y: auto;
+    }
+
+    .empty { text-align: center; padding: 4rem 1rem; color: #484f58; font-size: .875rem; }
+
+    @media (max-width: 640px) {
+      header { padding: .75rem 1rem; }
+      .container { padding: 1.25rem 1rem; }
+      .defense-meta { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>&#9650;</span> GrocerGuard Arena</div>
+  <nav>
+    <a href="/">Leaderboard</a>
+    <a href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">App</a>
+    <a href="https://red-team-agent-929315648024.us-central1.run.app" target="_blank">Red Team Console</a>
+  </nav>
+</header>
+
+<div class="container">
+  <p class="section-title">Blue Team Defenses &mdash; {{ defenses | length }} total</p>
+
+  {% if defenses %}
+    {% for d in defenses %}
+    <div class="defense-card">
+      <div class="defense-header">
+        <span class="defense-attack-id">Attack ID: {{ d.attack_id[:8] }}...</span>
+        {% if d.fixed %}
+          <span class="badge-fixed">fixed</span>
+        {% else %}
+          <span class="badge-failed">failed</span>
+        {% endif %}
+        <div class="defense-meta">
+          <span class="meta-item">{{ d.attempted_at.strftime('%Y-%m-%d %H:%M UTC') if d.attempted_at else '—' }}</span>
+        </div>
+      </div>
+
+      <div class="defense-body">
+
+        {% if d.target_url and d.target_url != '—' %}
+        <div>
+          <div class="field-label">Target URL</div>
+          <a class="url-link" href="{{ d.target_url }}" target="_blank">{{ d.target_url }}</a>
+        </div>
+        {% endif %}
+
+        {% if d.evidence %}
+        <div>
+          <div class="field-label">Evidence</div>
+          <div class="evidence-block">{{ d.evidence }}</div>
+        </div>
+        {% endif %}
+
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+  <div class="empty">No defenses logged yet — run the blue team agent to get started.</div>
+  {% endif %}
+</div>
+
+</body>
+</html>
