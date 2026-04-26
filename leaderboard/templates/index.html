@@ -193,18 +193,9 @@
 
     <div class="team-card blue">
       <div class="team-label">&#9650; Blue Team</div>
-      <div class="team-score"><a class="stat-link" href="/defenses">{{ stats.defense_fixed }}</a></div>
-      <div class="team-sublabel"><a class="stat-link" href="/defenses">successful defenses</a></div>
-      <div class="team-stats">
-        <div class="team-stat">
-          <div class="val"><a class="stat-link" href="#defense-log">{{ stats.defense_total }}</a></div>
-          <div class="lbl">Total Scans</div>
-        </div>
-        <div class="team-stat">
-          <div class="val"><a class="stat-link" href="#defense-log">{{ stats.defense_total - stats.defense_fixed }}</a></div>
-          <div class="lbl">Failed Defenses</div>
-        </div>
-      </div>
+      <div class="team-score" style="color:#484f58;">—</div>
+      <div class="team-sublabel">detections</div>
+      <div class="coming-soon">Blue team agent coming soon.</div>
     </div>
 
   </div>
@@ -271,51 +262,6 @@
     {% endif %}
   </div>
 
-  <!-- Defense log -->
-  <p class="section-title" style="margin-top:2rem;" id="defense-log">Blue Team Defense Log</p>
-  <div class="table-card">
-    <div class="table-header">
-      <span class="title">All Defenses</span>
-      <span class="count">{{ defenses | length }} entries</span>
-    </div>
-
-    {% if defenses %}
-    <div style="overflow-x:auto;">
-      <table>
-        <thead>
-          <tr>
-            <th>Time (UTC)</th>
-            <th>Attack ID</th>
-            <th>Target URL</th>
-            <th>Status</th>
-            <th>Evidence</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for d in defenses %}
-          <tr>
-            <td class="ts">{{ d.attempted_at.strftime('%Y-%m-%d %H:%M') if d.attempted_at else '—' }}</td>
-            <td style="font-family: monospace; font-size: .8rem;">{{ d.attack_id[:8] }}...</td>
-            <td>{{ d.target_url }}</td>
-            <td>
-              {% if d.fixed %}
-                <span class="badge badge-confirmed">fixed</span>
-              {% else %}
-                <span class="badge badge-failed">failed</span>
-              {% endif %}
-            </td>
-            <td class="evidence" title="{{ d.evidence }}">
-              {{ d.evidence[:160] }}{% if d.evidence|length > 160 %}&hellip;{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% else %}
-    <div class="empty">No defenses logged yet.</div>
-    {% endif %}
-  </div>
 
 </div>
 </body>
