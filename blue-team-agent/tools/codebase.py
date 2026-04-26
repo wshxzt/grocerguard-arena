@@ -20,11 +20,17 @@ def list_files(directory=None):
 
 
 def read_file(path):
+    # Resolve relative paths against CODEBASE_DIR
+    if not os.path.isabs(path):
+        path = os.path.join(CODEBASE_DIR, path)
     with open(path, 'r', encoding='utf-8') as f:
         return f.read()
 
 
 def write_file(path, content):
+    # Resolve relative paths against CODEBASE_DIR
+    if not os.path.isabs(path):
+        path = os.path.join(CODEBASE_DIR, path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         f.write(content)

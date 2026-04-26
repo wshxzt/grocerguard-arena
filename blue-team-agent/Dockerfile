@@ -1,7 +1,9 @@
 FROM google/cloud-sdk:slim
 
-RUN apt-get update && apt-get install -y python3-pip git && \
+RUN apt-get update && apt-get install -y python3-pip git curl && \
     rm -rf /var/lib/apt/lists/*
+
+RUN curl -L https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz | tar -xz -C /usr/local/bin crane
 
 WORKDIR /app
 COPY requirements.txt .

@@ -11,6 +11,8 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 from google.adk.agents import Agent
+from google.adk import Runner
+from google.adk.sessions import InMemorySessionService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,7 +78,7 @@ def get_status(run_id: str = "") -> str:
 
 chat_agent = Agent(
     name="chat_assistant",
-    model="gemini-3.1-flash",
+    model="gemini-2.5-flash",
     instruction=_CHAT_SYSTEM,
     tools=[trigger_scan, get_status]
 )
@@ -186,8 +188,28 @@ def chat():
         
         prompt = context + user_msg
 
-        # Adk handles tool loop internally
-        response = chat_agent.run(prompt)
+        # ADK handles tool loop internally
+        from google.genai import types
+        import asyncio
+
+        async def _run_chat():
+            session_service = InMemorySessionService()
+            runner = Runner(app_name="blue_team_app", agent=chat_agent, session_service=session_service)
+            session = await session_service.create_session(app_name="blue_team_app", user_id="system")
+
+            reply = ""
+            async for event in runner.run_async(
+                user_id="system",
+                session_id=session.id,
+                new_message=types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
+            ):
+                if event.content and event.content.parts:
+                    for part in event.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            reply += part.text
+            return reply
+
+        reply = asyncio.run(_run_chat())
 
         # Build clean history for frontend
         frontend_history = []
@@ -200,7 +222,7 @@ def chat():
         # to extract started_run_id reliably without parsing, but the frontend will just poll if needed.
 
         return jsonify({
-            'reply': str(response) or "(no response)",
+            'reply': reply or "(no response)",
             'history': frontend_history,
             'started_run_id': None,
         })
