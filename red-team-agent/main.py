@@ -33,10 +33,32 @@ _anthropic = anthropic.Anthropic()
 REPO_URL      = os.environ.get('REPO_URL', 'https://github.com/wshxzt/grocerguard-arena.git')
 WORKSPACE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace/grocerguard-arena')
 API_KEY       = os.environ.get('AGENT_API_KEY', '')
+SELF_URL      = os.environ.get('SELF_URL', '')
 
 _runs: dict[str, dict] = {}
 _runs_lock = threading.Lock()
 _run_reply_events: dict[str, threading.Event] = {}
+
+
+def _keepalive_loop():
+    """Ping our own /healthz every 45s while any run is active, so Cloud Run
+    doesn't kill the instance mid-run (it only counts load-balancer traffic)."""
+    import requests as _req
+    _ACTIVE = {'queued', 'setting_up', 'running', 'waiting'}
+    while True:
+        time.sleep(45)
+        if not SELF_URL:
+            continue
+        with _runs_lock:
+            has_active = any(r.get('status') in _ACTIVE for r in _runs.values())
+        if has_active:
+            try:
+                _req.get(f'{SELF_URL}/healthz', timeout=5)
+            except Exception:
+                pass
+
+
+threading.Thread(target=_keepalive_loop, daemon=True).start()
 
 # ── Claude chat ────────────────────────────────────────────────────────────────
 
