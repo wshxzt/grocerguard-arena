@@ -1,4 +1,4 @@
-"""Build and deploy the vulnerable GrocerGuard codebase to grocerguard-redteam."""
+"""Build and deploy the vulnerable GrocerGuard codebase to grocerguard."""
 import os
 import time
 import logging
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT      = os.environ['SPANNER_PROJECT_ID']
 REGION       = os.environ.get('REGION', 'us-central1')
-SERVICE      = 'grocerguard-redteam'
+SERVICE      = 'grocerguard'
 IMAGE        = f'gcr.io/{PROJECT}/{SERVICE}:latest'
 CODEBASE_DIR = os.environ.get('CODEBASE_DIR', '/workspace/grocerguard-arena/grocerguard-app')
 
@@ -26,8 +26,7 @@ def _run(cmd, timeout=300):
 
 
 def _get_service_url():
-    # Prefer the env var (already configured to point at grocerguard-redteam)
-    # to avoid needing Cloud Run describe permissions.
+    # Prefer the env var to avoid needing Cloud Run describe permissions.
     env_url = os.environ.get('APP_BASE_URL', '').strip()
     if env_url:
         return env_url

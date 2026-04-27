@@ -1,6 +1,9 @@
 """File system tools for reading and modifying the GrocerGuard codebase."""
 import os
 import subprocess
+import logging
+
+logger = logging.getLogger(__name__)
 
 CODEBASE_DIR = os.environ.get('CODEBASE_DIR', '/workspace/grocerguard-arena/grocerguard-app')
 
@@ -28,12 +31,12 @@ def read_file(path):
 
 
 def write_file(path, content):
-    # Resolve relative paths against CODEBASE_DIR
     if not os.path.isabs(path):
         path = os.path.join(CODEBASE_DIR, path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
+    logger.info(f'write_file: {path} ({len(content)} bytes)')
     return f'Written {len(content)} bytes to {path}'
 
 
@@ -44,4 +47,6 @@ def search_code(pattern, directory=None):
         capture_output=True, text=True
     )
     output = result.stdout.strip()
+    matches = len(output.splitlines()) if output else 0
+    logger.info(f'search_code: pattern={pattern!r} in {base} → {matches} match(es)')
     return output if output else '(no matches)'

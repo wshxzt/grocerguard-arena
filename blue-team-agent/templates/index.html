@@ -224,16 +224,9 @@ function addStatusBubble(text) {
 
 function formatSteps(steps) {
   if (!steps || !steps.length) return '';
-  const icons = { thinking: '🧠', text: '💬', tool_call: '🔧' };
   return '\n\n' + steps.slice(-8).map(s => {
-    if (s.type === 'thinking') return `🧠 ${s.text}`;
-    if (s.type === 'text')    return `💬 ${s.text}`;
-    if (s.type === 'tool_call') {
-      const args = Object.entries(s.inputs || {})
-        .map(([k, v]) => `${k}=${v}`).join(', ');
-      return `🔧 ${s.tool}(${args})`;
-    }
-    return '';
+    const icon = s.type === 'tool_call' ? '🔧' : '💬';
+    return `${icon} ${s.text || ''}`;
   }).filter(Boolean).join('\n');
 }
 
@@ -259,7 +252,7 @@ function startPolling(runId, info) {
     : runId.slice(0, 8) + '…';
   const bubble = addStatusBubble('');
   const bubbleEl = bubble.querySelector('.bubble');
-  const icons = { queued: '⏳', setting_up: '⚙️', running: '🔴', done: '✅', error: '❌' };
+  const icons = { queued: '⏳', setting_up: '⚙️', running: '🔵', done: '✅', error: '❌' };
   const startedAt = Date.now();
   let lastPolled = null;
   let cached = { status: 'queued', steps: [], detail: '' };
@@ -280,7 +273,7 @@ function startPolling(runId, info) {
     const steps  = cached.steps || [];
     const detail = cached.detail ? '\n' + cached.detail : '';
     const meta   = `${elapsed()} elapsed  ·  ${steps.length} steps  ·  synced ${polledAgo()}`;
-    const statusText = `${icon} ${label}  [${cached.status}]\n${meta}${detail}${formatSteps(steps)}`;
+    const statusText = `${icon} Blue Team Pipeline  [${cached.status}]\n${meta}${detail}${formatSteps(steps)}`;
 
     let html = `<span style="white-space:pre-wrap;word-break:break-word">${esc(statusText)}</span>`;
     if (cached.pending_question && cached.status === 'waiting') {

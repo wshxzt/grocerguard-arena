@@ -1,4 +1,4 @@
-"""Build and deploy the vulnerable GrocerGuard codebase to grocerguard-redteam."""
+"""Build and deploy the patched GrocerGuard codebase to grocerguard."""
 import os
 import time
 import logging
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT      = os.environ['SPANNER_PROJECT_ID']
 REGION       = os.environ.get('REGION', 'us-central1')
-SERVICE      = 'grocerguard-redteam'
+SERVICE      = 'grocerguard'
 IMAGE        = f'gcr.io/{PROJECT}/{SERVICE}:latest'
 CODEBASE_DIR = os.environ.get('CODEBASE_DIR', '/workspace/grocerguard-arena/grocerguard-app')
 

@@ -74,8 +74,9 @@
   <div class="logo"><span>&#9650;</span> GrocerGuard Arena</div>
   <nav>
     <a href="/">Leaderboard</a>
+    <a href="/blue-runs">Blue Runs</a>
+    <a href="https://blue-team-agent-929315648024.us-central1.run.app" target="_blank">Blue Team Console</a>
     <a href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">App</a>
-    <a href="https://red-team-agent-929315648024.us-central1.run.app" target="_blank">Red Team Console</a>
   </nav>
 </header>
 
@@ -93,7 +94,7 @@
           <span class="badge-failed">failed</span>
         {% endif %}
         <div class="defense-meta">
-          <span class="meta-item">{{ d.attempted_at.strftime('%Y-%m-%d %H:%M UTC') if d.attempted_at else '—' }}</span>
+          <span class="meta-item" style="color:#58a6ff;">{{ d.attempted_at | pst }}</span>
         </div>
       </div>
 

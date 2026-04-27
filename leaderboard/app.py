@@ -1,16 +1,33 @@
 """GrocerGuard Arena Leaderboard."""
 import os
 import logging
-from datetime import timezone
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import requests as http
 from flask import Flask, render_template, abort
 from google.cloud import spanner
 
 logger = logging.getLogger(__name__)
 
-AGENT_URL = os.environ.get('AGENT_URL', 'https://red-team-agent-hfzinwetfq-uc.a.run.app')
+AGENT_URL     = os.environ.get('AGENT_URL',      'https://red-team-agent-929315648024.us-central1.run.app')
+BLUE_TEAM_URL = os.environ.get('BLUE_TEAM_URL', 'https://blue-team-agent-929315648024.us-central1.run.app')
 
 app = Flask(__name__)
+
+_PST = ZoneInfo('America/Los_Angeles')
+
+@app.template_filter('pst')
+def to_pst(dt):
+    if dt is None:
+        return '—'
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt.replace('Z', '+00:00'))
+        except Exception:
+            return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_PST).strftime('%Y-%m-%d %H:%M')
 
 PROJECT  = os.environ['SPANNER_PROJECT_ID']
 INSTANCE = os.environ['SPANNER_INSTANCE_ID']
@@ -193,6 +210,70 @@ def fetch_runs():
         return []
 
 
+def fetch_blue_runs():
+    try:
+        resp = http.get(f'{BLUE_TEAM_URL}/runs', timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.warning(f'fetch_blue_runs failed: {e}')
+        return []
+
+
+def fetch_blue_live():
+    """Fetch in-progress run counts from the blue team agent."""
+    counts = {'queued': 0, 'running': 0, 'in_progress': 0}
+    try:
+        resp = http.get(f'{BLUE_TEAM_URL}/runs', timeout=3)
+        resp.raise_for_status()
+        for run in resp.json():
+            s = run.get('status', '')
+            if s == 'queued':
+                counts['queued'] += 1
+                counts['in_progress'] += 1
+            elif s in ('running', 'setting_up', 'waiting'):
+                counts['running'] += 1
+                counts['in_progress'] += 1
+    except Exception as e:
+        logger.warning(f'fetch_blue_live failed: {e}')
+    return counts
+
+
+def fetch_blue_stats():
+    """Fetch blue team defense totals from defense_log."""
+    try:
+        with get_db().snapshot() as snap:
+            row = snap.execute_sql(
+                'SELECT COUNT(*), COUNTIF(fixed = TRUE) FROM defense_log'
+            ).one()
+        return {'total': row[0], 'fixed': row[1]}
+    except Exception as e:
+        logger.warning(f'fetch_blue_stats failed: {e}')
+        return {'total': 0, 'fixed': 0}
+
+
+def fetch_defenses():
+    results = []
+    with get_db().snapshot() as snap:
+        rows = snap.execute_sql(
+            'SELECT id, attack_id, target_url, fixed, evidence, attempted_at '
+            'FROM defense_log ORDER BY attempted_at DESC'
+        )
+        for r in rows:
+            ts = r[5]
+            if ts and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            results.append({
+                'id':           r[0],
+                'attack_id':    r[1] or '',
+                'target_url':   r[2] or '—',
+                'fixed':        r[3],
+                'evidence':     (r[4] or '')[:400],
+                'attempted_at': ts,
+            })
+    return results
+
+
 def fetch_deploys():
     results = []
     with get_db().snapshot() as snap:
@@ -217,10 +298,13 @@ def fetch_deploys():
 
 @app.route('/')
 def index():
-    stats   = fetch_stats()
-    live    = fetch_live()
-    attacks = fetch_attacks()
-    return render_template('index.html', stats=stats, live=live, attacks=attacks)
+    stats      = fetch_stats()
+    live       = fetch_live()
+    attacks    = fetch_attacks()
+    blue_stats = fetch_blue_stats()
+    blue_live  = fetch_blue_live()
+    return render_template('index.html', stats=stats, live=live, attacks=attacks,
+                           blue_stats=blue_stats, blue_live=blue_live)
 
 
 @app.route('/attacks/<attack_id>')
@@ -239,6 +323,16 @@ def exploits_page():
 @app.route('/runs')
 def runs_page():
     return render_template('runs.html', runs=fetch_runs())
+
+
+@app.route('/blue-runs')
+def blue_runs_page():
+    return render_template('blue_runs.html', runs=fetch_blue_runs())
+
+
+@app.route('/defenses')
+def defenses_page():
+    return render_template('defenses.html', defenses=fetch_defenses())
 
 
 @app.route('/deploys')

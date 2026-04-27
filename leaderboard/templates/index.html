@@ -99,7 +99,7 @@
     .cwe-chip:hover { background: #2d333b; }
     .score { font-weight: 600; color: #f0883e; }
     .rank  { color: #8b949e; }
-    .ts    { color: #8b949e; white-space: nowrap; }
+    .ts    { color: #58a6ff; white-space: nowrap; }
     .evidence { color: #8b949e; font-size: .78rem; max-width: 260px; }
     .payload  { color: #8b949e; font-size: .78rem; font-family: monospace; max-width: 160px;
                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -132,8 +132,11 @@
 <header>
   <div class="logo"><span>&#9888;</span> GrocerGuard Arena</div>
   <nav>
+    <a href="/defenses">Defenses</a>
+    <a href="/blue-runs">Blue Runs</a>
     <a href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">App</a>
-    <a href="https://red-team-agent-929315648024.us-central1.run.app" target="_blank">Red Team Console</a>
+    <a href="https://red-team-agent-929315648024.us-central1.run.app" target="_blank">Red Team</a>
+    <a href="https://blue-team-agent-929315648024.us-central1.run.app" target="_blank">Blue Team</a>
   </nav>
 </header>
 
@@ -193,9 +196,32 @@
 
     <div class="team-card blue">
       <div class="team-label">&#9650; Blue Team</div>
-      <div class="team-score" style="color:#484f58;">—</div>
-      <div class="team-sublabel">detections</div>
-      <div class="coming-soon">Blue team agent coming soon.</div>
+      <div class="team-score"><a class="stat-link" href="/defenses">{{ blue_stats.fixed }}</a></div>
+      <div class="team-sublabel"><a class="stat-link" href="/defenses">confirmed fixes</a></div>
+      <div class="team-stats">
+        <div class="team-stat">
+          <div class="val"><a class="stat-link" href="/defenses">{{ blue_stats.total }}</a></div>
+          <div class="lbl">Defenses Run</div>
+        </div>
+        <div class="team-stat">
+          <div class="val"><a class="stat-link" href="/blue-runs">{{ blue_stats.fixed }}</a></div>
+          <div class="lbl">Patches Applied</div>
+        </div>
+      </div>
+      <div class="team-stats" style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid #21262d;">
+        <div class="team-stat">
+          <div class="val" style="color:{% if blue_live.queued > 0 %}#d29922{% else %}#8b949e{% endif %}">
+            <a class="stat-link" href="/blue-runs">{{ blue_live.queued }}</a>
+          </div>
+          <div class="lbl">Queued</div>
+        </div>
+        <div class="team-stat">
+          <div class="val" style="color:{% if blue_live.running > 0 %}#3fb950{% else %}#8b949e{% endif %}">
+            <a class="stat-link" href="/blue-runs">{{ blue_live.running }}</a>
+          </div>
+          <div class="lbl">In Progress</div>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -213,7 +239,7 @@
       <table>
         <thead>
           <tr>
-            <th>Time (UTC)</th>
+            <th>Time (PST)</th>
             <th>CWE</th>
             <th>Vulnerability</th>
             <th>Rank</th>
@@ -227,7 +253,7 @@
         <tbody>
           {% for a in attacks %}
           <tr>
-            <td class="ts">{{ a.attempted_at.strftime('%Y-%m-%d %H:%M') if a.attempted_at else '—' }}</td>
+            <td class="ts"><a href="/attacks/{{ a.id }}" style="color:inherit;text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">{{ a.attempted_at | pst }}</a></td>
             <td>
               <a class="cwe-chip"
                  href="https://cwe.mitre.org/data/definitions/{{ a.cwe_id | replace('CWE-','') }}.html"

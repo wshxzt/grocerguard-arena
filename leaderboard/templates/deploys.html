@@ -76,7 +76,7 @@
       <table>
         <thead>
           <tr>
-            <th>Time (UTC)</th>
+            <th>Time (PST)</th>
             <th>CWE</th>
             <th>Result</th>
             <th>Detail</th>
@@ -85,7 +85,7 @@
         <tbody>
           {% for d in deploys %}
           <tr>
-            <td class="ts">{{ d.attempted_at.strftime('%Y-%m-%d %H:%M') if d.attempted_at else '—' }}</td>
+            <td class="ts">{{ d.attempted_at | pst }}</td>
             <td>
               <a class="cwe-chip"
                  href="https://cwe.mitre.org/data/definitions/{{ d.cwe_id | replace('CWE-','') }}.html"

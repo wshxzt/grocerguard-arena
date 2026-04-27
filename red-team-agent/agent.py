@@ -31,7 +31,7 @@ _MODE_INSTRUCTIONS = {
     ),
     'attack': (
         'Mode: attack only.\n'
-        'The grocerguard-redteam service already has a vulnerability deployed — do NOT touch the codebase. '
+        'The grocerguard service already has a vulnerability deployed — do NOT touch the codebase. '
         'Skip list_files, read_file, write_file, search_code, and deploy. '
         'Go straight to attacking the live service with http_request, then log your findings.'
     ),
@@ -94,7 +94,7 @@ TOOLS = [
     {
         'name': 'deploy',
         'description': (
-            'Build the modified codebase and deploy it to the grocerguard-redteam '
+            'Build the modified codebase and deploy it to the grocerguard '
             'Cloud Run service. Returns the service URL or an error message.'
         ),
         'input_schema': {

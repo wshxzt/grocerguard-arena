@@ -7,6 +7,10 @@ import subprocess
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_PST = ZoneInfo('America/Los_Angeles')
 
 import anthropic
 from flask import Flask, request, jsonify, render_template
@@ -181,6 +185,9 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions, jitter
                 _runs[run_id]['detail'] = detail
 
     def on_progress(steps):
+        ts = datetime.now(_PST).strftime('%H:%M:%S')
+        for step in steps:
+            step['ts'] = ts
         with _runs_lock:
             _runs[run_id]['steps'] = (_runs[run_id].get('steps', []) + steps)[-40:]
 

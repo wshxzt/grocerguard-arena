@@ -115,7 +115,7 @@
       <div class="header-meta">
         <span class="meta-item">Rank <strong>#{{ attack.cwe_rank }}</strong></span>
         <span class="meta-item">Score <strong>{{ '%.1f' % attack.cwe_score }}</strong></span>
-        <span class="meta-item">{{ attack.attempted_at.strftime('%Y-%m-%d %H:%M UTC') if attack.attempted_at else '—' }}</span>
+        <span class="meta-item">{{ attack.attempted_at | pst }} PST</span>
       </div>
     </div>
 

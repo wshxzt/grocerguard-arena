@@ -6,6 +6,13 @@ import threading
 import time
 import uuid
 
+# Must be set before any ADK imports so the SDK uses Vertex AI instead of AI Studio.
+os.environ.setdefault('GOOGLE_GENAI_USE_VERTEXAI', '1')
+os.environ.setdefault('GOOGLE_CLOUD_PROJECT', 'zhiting-personal')
+os.environ.setdefault('GOOGLE_CLOUD_LOCATION', 'us-central1')
+os.environ.setdefault('GOOGLE_ADK_DISABLE_TELEMETRY', '1')
+os.environ.setdefault('OTEL_SDK_DISABLED', 'true')
+
 from flask import Flask, request, jsonify, render_template
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -29,8 +36,7 @@ limiter = Limiter(
     storage_uri='memory://',
 )
 
-API_KEY       = os.environ.get('AGENT_API_KEY', '')
-SCAN_INTERVAL = int(os.environ.get('SCAN_INTERVAL_MINUTES', '10'))
+API_KEY = os.environ.get('AGENT_API_KEY', '')
 
 _runs: dict[str, dict] = {}
 _runs_lock = threading.Lock()
@@ -86,15 +92,45 @@ chat_agent = Agent(
 # ── Background Execution & Autonomous Scanner ──────────────────────────────────
 
 def _execute_run(run_id, instructions=''):
+    logger.info(f'Run {run_id} starting (instructions: {instructions[:80]!r})')
+
+    last_progress = [time.time()]
+    stop_watchdog = threading.Event()
+
     def update(status, detail=''):
         with _runs_lock:
             _runs[run_id]['status'] = status
             if detail:
                 _runs[run_id]['detail'] = detail
+        logger.info(f'Run {run_id} status → {status}' + (f': {detail[:120]}' if detail else ''))
 
     def on_progress(steps):
+        last_progress[0] = time.time()
         with _runs_lock:
             _runs[run_id]['steps'] = (_runs[run_id].get('steps', []) + steps)[-40:]
+        for step in steps:
+            stype = step.get('type', '') if isinstance(step, dict) else ''
+            stext = step.get('text', str(step)) if isinstance(step, dict) else str(step)
+            if stype == 'tool_call':
+                logger.info(f'Run {run_id} step [{stype}]: {stext[:200]}')
+
+    def watchdog():
+        last_warned_at = 0
+        while not stop_watchdog.wait(15):
+            with _runs_lock:
+                status = _runs.get(run_id, {}).get('status', '')
+            if status not in ('running',):
+                continue
+            idle = int(time.time() - last_progress[0])
+            if idle >= 60 and (time.time() - last_warned_at) >= 60:
+                msg = f'⏳ No progress for {idle}s — agent likely waiting on Gemini (silent 429 retry / slow response)'
+                logger.warning(f'Run {run_id} watchdog: {msg}')
+                with _runs_lock:
+                    _runs[run_id]['steps'] = (
+                        _runs[run_id].get('steps', []) +
+                        [{'type': 'text', 'agent': 'watchdog', 'text': msg}]
+                    )[-40:]
+                last_warned_at = time.time()
 
     reply_event = threading.Event()
     with _runs_lock:
@@ -114,38 +150,22 @@ def _execute_run(run_id, instructions=''):
         logger.info(f'Run {run_id} got user reply: {reply[:80]}')
         return reply
 
+    threading.Thread(target=watchdog, daemon=True).start()
+
     try:
         update('running')
         from agent import run_agent
         run_agent(instructions=instructions, on_progress=on_progress, on_ask_user=on_ask_user)
         update('done')
+        logger.info(f'Run {run_id} finished successfully')
     except Exception as e:
         logger.exception(f'Run {run_id} failed')
         update('error', str(e))
     finally:
+        stop_watchdog.set()
         _run_reply_events.pop(run_id, None)
 
 
-def _autonomous_scanner_loop():
-    """Run a scan every SCAN_INTERVAL minutes."""
-    while True:
-        time.sleep(SCAN_INTERVAL * 60)
-        logger.info('Starting autonomous blue team scan.')
-        run_id = str(uuid.uuid4())
-        with _runs_lock:
-            _runs[run_id] = {
-                'run_id': run_id,
-                'type': 'autonomous',
-                'instructions': 'Autonomous background scan.',
-                'status': 'queued',
-                'detail': '',
-                'steps': [],
-                'pending_question': None,
-                'started_at': __import__('datetime').datetime.utcnow().isoformat() + 'Z',
-            }
-        _execute_run(run_id, instructions='Autonomous background scan.')
-
-threading.Thread(target=_autonomous_scanner_loop, daemon=True).start()
 
 # ── Auth Helper ───────────────────────────────────────────────────────────────
 
@@ -166,6 +186,7 @@ def index():
 @app.route('/chat', methods=['POST'])
 @limiter.limit('12 per minute')
 def chat():
+
     data     = request.get_json(silent=True) or {}
     user_msg = data.get('message', '').strip()
     history  = data.get('history', [])
@@ -198,33 +219,42 @@ def chat():
             session = await session_service.create_session(app_name="blue_team_app", user_id="system")
 
             reply = ""
+            started_run_id = None
             async for event in runner.run_async(
                 user_id="system",
                 session_id=session.id,
                 new_message=types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
             ):
-                if event.content and event.content.parts:
-                    for part in event.content.parts:
-                        if hasattr(part, 'text') and part.text:
-                            reply += part.text
-            return reply
+                if not event.content:
+                    continue
+                for part in event.content.parts:
+                    if hasattr(part, 'function_response') and part.function_response:
+                        fr = part.function_response
+                        if fr.name == 'trigger_scan':
+                            try:
+                                # ADK wraps string return values under 'result' or 'output'
+                                resp = fr.response or {}
+                                raw = resp.get('result') or resp.get('output', '')
+                                data = json.loads(raw) if isinstance(raw, str) else raw
+                                started_run_id = data.get('run_id')
+                            except Exception:
+                                pass
+                    elif hasattr(part, 'text') and part.text:
+                        reply += part.text
+            return reply, started_run_id
 
-        reply = asyncio.run(_run_chat())
+        reply, started_run_id = asyncio.run(_run_chat())
 
-        # Build clean history for frontend
         frontend_history = []
         for m in history:
-             if isinstance(m, dict) and "content" in m and isinstance(m["content"], str):
-                 r = "user" if m.get("role") == "user" else "assistant"
-                 frontend_history.append({"role": r, "content": m["content"]})
-        
-        # We don't have direct access to internal tool calls from the simple .run() API 
-        # to extract started_run_id reliably without parsing, but the frontend will just poll if needed.
+            if isinstance(m, dict) and "content" in m and isinstance(m["content"], str):
+                r = "user" if m.get("role") == "user" else "assistant"
+                frontend_history.append({"role": r, "content": m["content"]})
 
         return jsonify({
             'reply': reply or "(no response)",
             'history': frontend_history,
-            'started_run_id': None,
+            'started_run_id': started_run_id,
         })
     except Exception as e:
         logger.exception("Chat failed")
@@ -263,16 +293,12 @@ def trigger_run():
 
 @app.route('/runs', methods=['GET'])
 def list_runs():
-    err = _check_auth()
-    if err: return err
     with _runs_lock:
         return jsonify(list(reversed(list(_runs.values()))))
 
 
 @app.route('/runs/<run_id>', methods=['GET'])
 def get_run(run_id):
-    err = _check_auth()
-    if err: return err
     with _runs_lock:
         run = _runs.get(run_id)
     if not run:

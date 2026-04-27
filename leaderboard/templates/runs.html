@@ -47,7 +47,8 @@
     .step-thinking { background: #1a1f2e; border-left: 3px solid #58a6ff; color: #c9d1d9; font-style: italic; }
     .step-text     { background: #1a2a1a; border-left: 3px solid #3fb950; color: #c9d1d9; }
     .step-tool     { background: #21262d; border-left: 3px solid #f0883e; font-family: monospace; color: #c9d1d9; }
-    .step-label    { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .2rem; }
+    .step-label    { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .2rem; display: flex; justify-content: space-between; align-items: baseline; }
+    .step-ts       { font-size: .65rem; font-weight: 400; font-family: monospace; opacity: .55; text-transform: none; letter-spacing: 0; }
     .step-thinking .step-label { color: #58a6ff; }
     .step-text     .step-label { color: #3fb950; }
     .step-tool     .step-label { color: #f0883e; }
@@ -96,17 +97,17 @@
         {% for step in run.steps %}
           {% if step.type == 'thinking' %}
           <div class="step step-thinking">
-            <div class="step-label">Thinking</div>
+            <div class="step-label">Thinking<span class="step-ts">{{ step.ts or '' }}</span></div>
             {{ step.text }}
           </div>
           {% elif step.type == 'text' %}
           <div class="step step-text">
-            <div class="step-label">Agent</div>
+            <div class="step-label">Agent<span class="step-ts">{{ step.ts or '' }}</span></div>
             {{ step.text }}
           </div>
           {% elif step.type == 'tool_call' %}
           <div class="step step-tool">
-            <div class="step-label">Tool call</div>
+            <div class="step-label">Tool call<span class="step-ts">{{ step.ts or '' }}</span></div>
             <span class="tool-name">{{ step.tool }}</span>{% if step.inputs %}({% for k, v in step.inputs.items() %}<span class="tool-arg">{{ k }}=</span>{{ v }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}
           </div>
           {% endif %}
