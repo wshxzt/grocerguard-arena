@@ -114,16 +114,25 @@ def _execute_run(run_id, instructions=''):
             if stype == 'tool_call':
                 logger.info(f'Run {run_id} step [{stype}]: {stext[:200]}')
 
+    # Tools known to take a while; suppress watchdog warning while they're running.
+    _SLOW_TOOLS = {'inspect_deployed_filesystem', 'deploy'}
+
     def watchdog():
         last_warned_at = 0
         while not stop_watchdog.wait(15):
             with _runs_lock:
-                status = _runs.get(run_id, {}).get('status', '')
-            if status not in ('running',):
+                run = _runs.get(run_id, {})
+                status = run.get('status', '')
+                last_step = run.get('steps', [])[-1] if run.get('steps') else None
+            if status != 'running':
                 continue
             idle = int(time.time() - last_progress[0])
-            if idle >= 60 and (time.time() - last_warned_at) >= 60:
-                msg = f'⏳ No progress for {idle}s — agent likely waiting on Gemini (silent 429 retry / slow response)'
+            threshold = 360 if (last_step and any(t in last_step.get('text','') for t in _SLOW_TOOLS)) else 60
+            if idle >= threshold and (time.time() - last_warned_at) >= 60:
+                if last_step and last_step.get('type') == 'tool_call':
+                    msg = f'⏳ No progress for {idle}s — last step was a slow tool: {last_step.get("text","")[:120]}'
+                else:
+                    msg = f'⏳ No progress for {idle}s — agent likely waiting on Gemini (silent 429 retry / slow response)'
                 logger.warning(f'Run {run_id} watchdog: {msg}')
                 with _runs_lock:
                     _runs[run_id]['steps'] = (

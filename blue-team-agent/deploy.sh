@@ -37,6 +37,9 @@ gcloud run deploy "$SERVICE" \
   --allow-unauthenticated \
   --memory 1Gi \
   --timeout 3600 \
+  --min-instances 1 \
+  --max-instances 1 \
+  --no-cpu-throttling \
   --set-env-vars "SPANNER_PROJECT_ID=$PROJECT,SPANNER_INSTANCE_ID=grocerguard-instance,SPANNER_DATABASE_ID=grocerguard,APP_BASE_URL=https://grocerguard-hfzinwetfq-uc.a.run.app,SCAN_INTERVAL_MINUTES=120" \
   --set-secrets "AGENT_API_KEY=grocerguard-secret-key:latest" \
   --project "$PROJECT"
