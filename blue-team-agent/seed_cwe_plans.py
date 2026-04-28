@@ -20,7 +20,7 @@ PLANS = [
 
     ('CWE-79',
      ['app/templates/**/*.html', 'app/routes/*.py'],
-     ['|safe', 'Markup(', 'autoescape false', 'render_template_string'],
+     ['| safe', '|safe', 'Markup(', 'autoescape false', 'render_template_string'],
      ['<script', 'javascript:', 'onerror=', '%3Cscript', '<img '],
      'Jinja2 autoescapes by default; `|safe` or `Markup()` opts out. Reflected XSS '
      'is unescaped user input rendered in templates; stored XSS is unescaped DB '

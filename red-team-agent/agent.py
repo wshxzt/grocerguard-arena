@@ -225,7 +225,7 @@ def dispatch_tool(name, inputs, cwe_id=None, on_ask_user=None):
     return f'Unknown tool: {name}'
 
 
-def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_progress=None, on_ask_user=None):
+def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_progress=None, on_ask_user=None, stop_event=None):
     logger.info(f'Starting agent: {cwe_id} ({cwe_name}), mode={mode}')
 
     mode = mode if mode in _MODE_INSTRUCTIONS else 'both'
@@ -243,6 +243,11 @@ def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_prog
     messages = [{'role': 'user', 'content': user_message}]
 
     while True:
+        if stop_event is not None and stop_event.is_set():
+            logger.info('Agent stopped by user request.')
+            if on_progress:
+                on_progress([{'type': 'text', 'text': 'Run stopped by user.'}])
+            return
         response = client.messages.create(
             model='claude-opus-4-7',
             max_tokens=8096,

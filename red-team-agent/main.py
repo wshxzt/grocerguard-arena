@@ -42,6 +42,37 @@ SELF_URL      = os.environ.get('SELF_URL', '')
 _runs: dict[str, dict] = {}
 _runs_lock = threading.Lock()
 _run_reply_events: dict[str, threading.Event] = {}
+_run_stop_events: dict[str, threading.Event] = {}
+
+
+def _stop_run(run_id: str = '') -> dict:
+    """Signal a run to stop. If run_id is empty, stop the most recent running/queued run."""
+    target_id = run_id
+    with _runs_lock:
+        if not target_id:
+            for rid, run in reversed(list(_runs.items())):
+                if run.get('status') in ('queued', 'setting_up', 'running', 'waiting'):
+                    target_id = rid
+                    break
+        if not target_id:
+            return {'error': 'no active run to stop'}
+        run = _runs.get(target_id)
+        if not run:
+            return {'error': f'run {target_id} not found'}
+        ev = _run_stop_events.get(target_id)
+    if ev is None:
+        return {'error': f'run {target_id} cannot be stopped (already finished?)'}
+    ev.set()
+    # Also unblock any pending ask_user wait so the agent can exit cleanly.
+    reply_ev = _run_reply_events.get(target_id)
+    if reply_ev is not None:
+        with _runs_lock:
+            _runs[target_id]['pending_reply'] = ''
+            _runs[target_id]['pending_question'] = None
+        reply_ev.set()
+    logger.info(f'Run {target_id} stop requested')
+    return {'run_id': target_id, 'status': 'stop requested',
+            'note': 'stop will take effect after the current Claude turn finishes (≤60s).'}
 
 
 def _keepalive_loop():
@@ -69,11 +100,13 @@ threading.Thread(target=_keepalive_loop, daemon=True).start()
 _CHAT_SYSTEM = """You are the GrocerGuard Red Team assistant, running at the red-team-agent service.
 You help users manage automated security attacks against the GrocerGuard target application.
 
-You have two tools:
+You have three tools:
 - start_attack: trigger a red team run (inject a vulnerability, attack it, or both)
+- stop_attack: stop a currently running attack (use when the user asks to stop / cancel / kill / abort)
 - get_status: check the status of recent runs
 
 When the user asks to start / run / launch an attack, use start_attack.
+When the user asks to stop / cancel / kill / abort, use stop_attack. If they don't specify which run, omit run_id and the server stops the most recent active one.
 When the user asks about status, results, or what is happening, use get_status.
 For anything else, answer directly.
 
@@ -97,6 +130,17 @@ _CHAT_TOOLS = [
                 'instructions':{'type': 'string', 'description': 'Specific guidance for the agent.'},
             },
             'required': ['mode'],
+        },
+    },
+    {
+        'name': 'stop_attack',
+        'description': 'Stop a currently running attack run. Use when the user asks to stop, cancel, kill, or abort.',
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'run_id': {'type': 'string', 'description': 'OPTIONAL run ID. Omit to stop the most recent active run.'},
+            },
+            'required': [],
         },
     },
     {
@@ -151,6 +195,9 @@ def _call_tool(name, inputs):
         return {'run_id': run_id, 'cwe_id': cwe['cwe_id'], 'cwe_name': cwe['name'],
                 'mode': mode, 'status': 'queued'}
 
+    if name == 'stop_attack':
+        return _stop_run(inputs.get('run_id', '').strip())
+
     if name == 'get_status':
         run_id = inputs.get('run_id', '').strip()
         with _runs_lock:
@@ -194,8 +241,10 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions, jitter
             _runs[run_id]['steps'] = (_runs[run_id].get('steps', []) + steps)[-40:]
 
     reply_event = threading.Event()
+    stop_event = threading.Event()
     with _runs_lock:
         _run_reply_events[run_id] = reply_event
+        _run_stop_events[run_id] = stop_event
 
     def on_ask_user(question):
         reply_event.clear()
@@ -225,14 +274,19 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions, jitter
         update('running', f'{cwe_id} / mode={mode}')
         from agent import run_agent
         run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions,
-                  on_progress=on_progress, on_ask_user=on_ask_user)
-        update('done')
-        final_status = 'done'
+                  on_progress=on_progress, on_ask_user=on_ask_user, stop_event=stop_event)
+        if stop_event.is_set():
+            update('stopped', 'stopped by user')
+            final_status = 'stopped'
+        else:
+            update('done')
+            final_status = 'done'
     except Exception as e:
         logger.exception(f'Run {run_id} failed')
         update('error', str(e))
     finally:
         _run_reply_events.pop(run_id, None)
+        _run_stop_events.pop(run_id, None)
         # Persist completed run to Spanner
         try:
             import db
@@ -429,6 +483,11 @@ def reply_run(run_id):
     if event:
         event.set()
     return jsonify({'ok': True})
+
+
+@app.route('/runs/<run_id>/stop', methods=['POST'])
+def stop_run_route(run_id):
+    return jsonify(_stop_run(run_id))
 
 
 @app.route('/healthz')
