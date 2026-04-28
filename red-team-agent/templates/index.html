@@ -263,7 +263,8 @@ function startPolling(runId, info) {
     : runId.slice(0, 8) + '…';
   const bubble = addStatusBubble('');
   const bubbleEl = bubble.querySelector('.bubble');
-  const icons = { queued: '⏳', setting_up: '⚙️', running: '🔴', done: '✅', error: '❌' };
+  const icons = { queued: '⏳', setting_up: '⚙️', running: '🔴', done: '✅', error: '❌', stopped: '⏹️' };
+  const TERMINAL = new Set(['done', 'error', 'stopped']);
   const startedAt = Date.now();
   let lastPolled = null;
   let cached = { status: 'queued', steps: [], detail: '' };
@@ -319,7 +320,7 @@ function startPolling(runId, info) {
       cached = await res.json();
       lastPolled = Date.now();
       render();
-      if (cached.status === 'done' || cached.status === 'error') {
+      if (TERMINAL.has(cached.status)) {
         clearInterval(pollTimer);
         clearInterval(clockTimer);
       }
