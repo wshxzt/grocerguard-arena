@@ -241,25 +241,64 @@ def _execute_run(run_id, instructions=''):
             _runs[run_id]['pending_question'] = question
             _runs[run_id]['status'] = 'waiting'
         logger.info(f'Run {run_id} waiting for user input: {question[:80]}')
-        reply_event.wait()
+        got = reply_event.wait(timeout=300)  # 5 minutes
         with _runs_lock:
             reply = _runs[run_id].pop('pending_reply', '')
             _runs[run_id]['pending_question'] = None
             _runs[run_id]['status'] = 'running'
+        if not got:
+            logger.info(f'Run {run_id} ask_user timed out after 300s — treating as no reply')
+            return ''
         logger.info(f'Run {run_id} got user reply: {reply[:80]}')
         return reply
 
     threading.Thread(target=watchdog, daemon=True).start()
 
+    def on_cwe_progress(cwe_id, status, note=''):
+        with _runs_lock:
+            progress = _runs[run_id].setdefault('cwe_progress', {})
+            progress[cwe_id] = {'status': status, 'note': note}
+
     def on_state(key, value):
         state_captures[key] = value
+        # Parse CWE plan / progress so the bubble can render a checklist.
+        import re
+        if key == 'gather_findings' and isinstance(value, str):
+            seen, ordered = set(), []
+            for m in re.finditer(r'CWE-\d+', value):
+                c = m.group(0)
+                if c not in seen:
+                    seen.add(c)
+                    ordered.append(c)
+            with _runs_lock:
+                _runs[run_id]['planned_cwes'] = ordered
+        elif key == 'diagnosis' and isinstance(value, str):
+            up = value.upper()
+            if 'NO CONFIRMED' in up:
+                confirmed = []
+            else:
+                confirmed = []
+                for pat in (r'###\s*\d+\.\s*(CWE-\d+)', r'CONFIRMED[^\n]*?(CWE-\d+)'):
+                    confirmed = re.findall(pat, value)
+                    if confirmed:
+                        break
+                # Dedup, preserve order
+                seen, deduped = set(), []
+                for c in confirmed:
+                    if c not in seen:
+                        seen.add(c)
+                        deduped.append(c)
+                confirmed = deduped
+            with _runs_lock:
+                _runs[run_id]['confirmed_cwes'] = confirmed
 
     final_status = 'error'
     try:
         update('running')
         from agent import run_agent
         run_agent(instructions=instructions, on_progress=on_progress,
-                  on_ask_user=on_ask_user, on_state=on_state)
+                  on_ask_user=on_ask_user, on_state=on_state,
+                  on_cwe_progress=on_cwe_progress, run_id=run_id)
         update('done')
         final_status = 'done'
         logger.info(f'Run {run_id} finished successfully')

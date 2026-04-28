@@ -176,7 +176,8 @@ def fetch_exploits():
                  COALESCE(c.score, 0.0)  AS cwe_score,
                  a.target_url,
                  a.payload,
-                 a.evidence
+                 a.evidence,
+                 a.run_id
                FROM attack_log a
                LEFT JOIN cwe_registry c USING (cwe_id)
                WHERE a.status = 'confirmed'
@@ -196,6 +197,7 @@ def fetch_exploits():
                 'target_url':   r[6] or '—',
                 'payload':      r[7] or '',
                 'evidence':     r[8] or '',
+                'run_id':       r[9] or '',
             })
     return results
 
@@ -332,13 +334,15 @@ def fetch_blue_stats():
 
 
 def fetch_defenses():
+    """Flat list of defense_log entries (one row per defense, joined with CWE info).
+    Used by the /defenses page; the leaderboard index uses fetch_defense_groups()."""
     results = []
     with get_db().snapshot() as snap:
         rows = snap.execute_sql(
-            """SELECT d.id, d.attack_id, d.target_url, d.fixed, d.evidence, d.attempted_at,
-                      COALESCE(a.cwe_id, '')          AS cwe_id,
-                      COALESCE(c.name,   '—')         AS cwe_name,
-                      COALESCE(c.rank,   0)           AS cwe_rank
+            """SELECT d.id, d.attack_id, d.target_url, d.fixed, d.evidence, d.attempted_at, d.run_id,
+                      COALESCE(a.cwe_id, '')  AS cwe_id,
+                      COALESCE(c.name,   '—') AS cwe_name,
+                      COALESCE(c.rank,   0)   AS cwe_rank
                FROM defense_log d
                LEFT JOIN attack_log   a ON a.id     = d.attack_id
                LEFT JOIN cwe_registry c ON c.cwe_id = a.cwe_id
@@ -355,11 +359,66 @@ def fetch_defenses():
                 'fixed':        r[3],
                 'evidence':     (r[4] or '')[:400],
                 'attempted_at': ts,
-                'cwe_id':       r[6] or '',
-                'cwe_name':     r[7],
-                'cwe_rank':     r[8],
+                'run_id':       r[6] or '',
+                'cwe_id':       r[7] or '',
+                'cwe_name':     r[8],
+                'cwe_rank':     r[9],
             })
     return results
+
+
+def fetch_defense_groups():
+    """Grouped view: one entry per blue-team scan (by run_id), with all CWEs
+    fixed/not-fixed in that scan. Defenses with NULL run_id (legacy rows from
+    before the schema change) each get their own group keyed on entry id."""
+    raw = fetch_defenses()
+    groups = {}  # group_key → group dict
+    order = []   # preserve newest-first ordering
+    for d in raw:
+        gk = d['run_id'] or f"_solo:{d['id']}"
+        g = groups.get(gk)
+        if g is None:
+            g = {
+                'run_id':       d['run_id'],
+                'group_key':    gk,
+                'attempted_at': d['attempted_at'],
+                'cwes_by_id':   {},   # cwe_id → {cwe_id, cwe_name, cwe_rank, fixed}
+                'fixed_count':  0,
+                'total_count':  0,
+                'evidences':    [],
+                'target_urls':  set(),
+            }
+            groups[gk] = g
+            order.append(gk)
+        # Dedupe CWE entries within a group; a CWE is fixed only if EVERY
+        # defense for that CWE in this scan succeeded.
+        cwe = g['cwes_by_id'].get(d['cwe_id'])
+        if cwe is None:
+            g['cwes_by_id'][d['cwe_id']] = {
+                'cwe_id':   d['cwe_id'],
+                'cwe_name': d['cwe_name'],
+                'cwe_rank': d['cwe_rank'],
+                'fixed':    bool(d['fixed']),
+            }
+        else:
+            cwe['fixed'] = cwe['fixed'] and bool(d['fixed'])
+        g['total_count'] += 1
+        if d['fixed']:
+            g['fixed_count'] += 1
+        if d['target_url'] and d['target_url'] != '—':
+            g['target_urls'].add(d['target_url'])
+        if d['evidence']:
+            g['evidences'].append(d['evidence'][:160])
+
+    out = []
+    for gk in order:
+        g = groups[gk]
+        cwes = list(g.pop('cwes_by_id').values())
+        cwes.sort(key=lambda x: (x['cwe_rank'] or 9999, x['cwe_id']))
+        g['cwes'] = cwes
+        g['target_urls'] = sorted(g['target_urls'])
+        out.append(g)
+    return out
 
 
 def fetch_deploys(team=None):
@@ -393,7 +452,7 @@ def index():
     stats      = fetch_stats()
     live       = fetch_live()
     attacks    = fetch_attacks()
-    defenses   = fetch_defenses()
+    defenses   = fetch_defense_groups()  # one row per scan
     blue_stats = fetch_blue_stats()
     blue_live  = fetch_blue_live()
     return render_template('index.html', stats=stats, live=live, attacks=attacks,

@@ -18,7 +18,7 @@
       display: flex; align-items: center; gap: .65rem;
       flex-shrink: 0;
     }
-    .dot { width: 9px; height: 9px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 7px #3fb950; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #58a6ff; box-shadow: 0 0 7px #58a6ff; }
     header h1 { font-size: .95rem; font-weight: 600; }
     header small { margin-left: auto; color: #8b949e; font-size: .75rem; }
     #messages {
@@ -222,22 +222,57 @@ function addStatusBubble(text) {
   return d;
 }
 
+function formatCwePlan(cached) {
+  const planned = cached.planned_cwes || [];
+  if (!planned.length) return '';
+  // Per-CWE live progress emitted by the analyze agent's mark_cwe_status calls.
+  const progress = cached.cwe_progress || {};
+  const confirmed = new Set(cached.confirmed_cwes || []);
+  const analyzeFinished = Array.isArray(cached.confirmed_cwes);
+
+  let confirmedCount = 0;
+  const items = planned.map(c => {
+    const p = progress[c];
+    if (p && p.status === 'analyzing') return `  🔍 ${c} (analyzing…)`;
+    if (p && p.status === 'confirmed') { confirmedCount++; return `  ✓ ${c}`; }
+    if (p && p.status === 'ruled_out') {
+      return p.note ? `  ✗ ${c} — ${p.note}` : `  ✗ ${c} (ruled out)`;
+    }
+    // Fall back to the diagnosis-derived state if no live mark exists.
+    if (confirmed.has(c)) { confirmedCount++; return `  ✓ ${c}`; }
+    if (analyzeFinished)  return `  ✗ ${c} (ruled out)`;
+    return `  ⏳ ${c}`;
+  });
+  const total = planned.length;
+  const header = analyzeFinished
+    ? `Plan (${confirmedCount}/${total} confirmed):`
+    : `Plan (${confirmedCount}/${total} confirmed so far · ${total} candidates):`;
+  return `\n\n${header}\n${items.join('\n')}`;
+}
+
 function formatSteps(steps) {
   if (!steps || !steps.length) return '';
   return '\n\n' + steps.slice(-6).map(s => {
     const icon = s.type === 'tool_call' ? '🔧' : '💬';
     const agent = s.agent ? ` [${s.agent}]` : '';
-    const text = (s.text || '').slice(0, 220);
+    // tool_calls are short by nature; text/agent output (e.g. CWE plan dumps,
+    // diagnoses) needs a much larger budget so it isn't chopped mid-sentence.
+    const limit = s.type === 'tool_call' ? 300 : 1800;
+    let text = (s.text || '');
+    if (text.length > limit) text = text.slice(0, limit) + '…';
     return `${icon}${agent} ${text}`;
   }).filter(Boolean).join('\n\n');
 }
 
-async function replyRun(runId) {
+async function replyRun(runId, fixedReply) {
   const input = document.getElementById(`ask-${runId}`);
-  const btn   = document.getElementById(`ask-btn-${runId}`);
-  const reply = input?.value.trim();
+  const btnSend = document.getElementById(`ask-btn-${runId}`);
+  const btnYes  = document.getElementById(`ask-yes-${runId}`);
+  const btnNo   = document.getElementById(`ask-no-${runId}`);
+  const reply = (typeof fixedReply === 'string') ? fixedReply : input?.value.trim();
   if (!reply) return;
-  if (btn) btn.disabled = true;
+  // Disable everything to prevent double-submit
+  [btnSend, btnYes, btnNo].forEach(b => { if (b) b.disabled = true; });
   if (input) input.disabled = true;
   try {
     await fetch(`/runs/${runId}/reply`, {
@@ -254,7 +289,7 @@ function startPolling(runId, info) {
     : runId.slice(0, 8) + '…';
   const bubble = addStatusBubble('');
   const bubbleEl = bubble.querySelector('.bubble');
-  const icons = { queued: '⏳', setting_up: '⚙️', running: '🔵', done: '✅', error: '❌' };
+  const icons = { queued: '⏳', setting_up: '⚙️', running: '🔵', done: '✅', error: '❌', lost: '⚠️' };
   const startedAt = Date.now();
   let lastPolled = null;
   let cached = { status: 'queued', steps: [], detail: '' };
@@ -275,16 +310,25 @@ function startPolling(runId, info) {
     const steps  = cached.steps || [];
     const detail = cached.detail ? '\n' + cached.detail : '';
     const meta   = `${elapsed()} elapsed  ·  ${steps.length} steps  ·  synced ${polledAgo()}`;
-    const statusText = `${icon} Blue Team Pipeline  [${cached.status}]\n${meta}${detail}${formatSteps(steps)}`;
+    const statusText = `${icon} Blue Team Pipeline  [${cached.status}]\n${meta}${detail}${formatCwePlan(cached)}${formatSteps(steps)}`;
 
     let html = `<span style="white-space:pre-wrap;word-break:break-word">${esc(statusText)}</span>`;
     if (cached.pending_question && cached.status === 'waiting') {
       bubble.classList.add('waiting');
       html += `<div class="ask-box">
         <div class="ask-q">❓ ${esc(cached.pending_question)}</div>
-        <div class="ask-row">
-          <input id="ask-${runId}" class="ask-input" placeholder="Type your response…">
+        <div class="ask-row" style="gap:.4rem;">
+          <button class="ask-btn" id="ask-yes-${runId}"
+                  style="background:#3fb950; color:#0d1117;"
+                  onclick="replyRun('${runId}', 'yes')">✓ Yes</button>
+          <button class="ask-btn" id="ask-no-${runId}"
+                  style="background:#8b949e; color:#0d1117;"
+                  onclick="replyRun('${runId}', 'no')">✗ No</button>
+          <input id="ask-${runId}" class="ask-input" placeholder="…or type a custom reply">
           <button class="ask-btn" id="ask-btn-${runId}" onclick="replyRun('${runId}')">Send</button>
+        </div>
+        <div style="margin-top:.4rem; font-size:.7rem; color:#8b949e;">
+          Reply <strong>here</strong>, not in the main chat box at the bottom — that goes to a different agent.
         </div>
       </div>`;
     } else {
@@ -302,15 +346,33 @@ function startPolling(runId, info) {
   // Clock: re-render every second for live elapsed time + "synced Xs ago"
   const clockTimer = setInterval(render, 1000);
 
-  // Poll server every 3 seconds for status + step updates
+  // Poll server every 3 seconds for status + step updates.
+  // Track consecutive 404s — if the agent container restarted, the run is gone
+  // from in-memory state and the bubble would otherwise loop forever on stale data.
+  let missCount = 0;
+  const TERMINAL = new Set(['done', 'error', 'lost']);
   const pollTimer = setInterval(async () => {
     try {
       const res = await fetch(`/runs/${runId}`);
+      if (res.status === 404) {
+        missCount++;
+        if (missCount >= 3) {
+          cached = Object.assign({}, cached, {
+            status: 'lost',
+            detail: 'Run state lost — likely the agent container restarted mid-run (e.g. a redeploy). The pipeline may have completed; check the leaderboard Run History.',
+          });
+          render();
+          clearInterval(pollTimer);
+          clearInterval(clockTimer);
+        }
+        return;
+      }
       if (!res.ok) return;
+      missCount = 0;
       cached = await res.json();
       lastPolled = Date.now();
       render();
-      if (cached.status === 'done' || cached.status === 'error') {
+      if (TERMINAL.has(cached.status)) {
         clearInterval(pollTimer);
         clearInterval(clockTimer);
       }

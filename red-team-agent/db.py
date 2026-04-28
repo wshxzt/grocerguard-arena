@@ -66,13 +66,13 @@ def get_next_cwe():
     return {'cwe_id': cwe_id, 'name': name, 'rank': rank, 'score': float(score)}
 
 
-def log_finding(cwe_id, target_url, payload, status, evidence):
+def log_finding(cwe_id, target_url, payload, status, evidence, run_id=None):
     now = datetime.now(timezone.utc)
     with get_db().batch() as batch:
         batch.insert(
             table='attack_log',
-            columns=['id', 'cwe_id', 'target_url', 'payload', 'status', 'evidence', 'attempted_at'],
-            values=[(str(uuid.uuid4()), cwe_id, target_url, payload, status, evidence, now)]
+            columns=['id', 'cwe_id', 'target_url', 'payload', 'status', 'evidence', 'attempted_at', 'run_id'],
+            values=[(str(uuid.uuid4()), cwe_id, target_url, payload, status, evidence, now, run_id)]
         )
 
 

@@ -77,6 +77,11 @@
     .table-header .title { font-size: .8rem; font-weight: 600; }
     .table-header .count { font-size: .75rem; color: #8b949e; }
     table { width: 100%; border-collapse: collapse; }
+    .scroll-rows { max-height: 280px; overflow-y: auto; overflow-x: auto; }
+    .scroll-rows table thead th {
+      position: sticky; top: 0; z-index: 1;
+      background: #161b22;
+    }
     th {
       font-size: .7rem; font-weight: 600; text-transform: uppercase;
       letter-spacing: .07em; color: #8b949e;
@@ -97,9 +102,11 @@
       white-space: nowrap;
     }
     .cwe-chip:hover { background: #2d333b; }
+    .cwe-chip-red { color: #f85149; }
     .score { font-weight: 600; color: #f0883e; }
     .rank  { color: #8b949e; }
     .ts    { color: #58a6ff; white-space: nowrap; }
+    .ts-red { color: #f85149; white-space: nowrap; }
     .evidence { color: #8b949e; font-size: .78rem; max-width: 260px; }
     .payload  { color: #8b949e; font-size: .78rem; font-family: monospace; max-width: 160px;
                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -264,7 +271,7 @@
     </div>
 
     {% if attacks %}
-    <div style="overflow-x:auto;">
+    <div class="scroll-rows">
       <table>
         <thead>
           <tr>
@@ -281,9 +288,9 @@
         <tbody>
           {% for a in attacks %}
           <tr>
-            <td class="ts"><a href="/attacks/{{ a.id }}" style="color:inherit;text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">{{ a.attempted_at | pst }}</a></td>
+            <td class="ts-red"><a href="/attacks/{{ a.id }}" style="color:inherit;text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">{{ a.attempted_at | pst }}</a></td>
             <td>
-              <a class="cwe-chip"
+              <a class="cwe-chip cwe-chip-red"
                  href="https://cwe.mitre.org/data/definitions/{{ a.cwe_id | replace('CWE-','') }}.html"
                  target="_blank">{{ a.cwe_id }}</a>
             </td>
@@ -322,44 +329,63 @@
     </div>
 
     {% if defenses %}
-    <div style="overflow-x:auto;">
+    <div class="scroll-rows">
       <table>
         <thead>
           <tr>
             <th>Time (PST)</th>
-            <th>CWE</th>
-            <th>Vulnerability</th>
-            <th>Rank</th>
-            <th>Status</th>
-            <th>Target URL</th>
+            <th>CWEs</th>
+            <th>Result</th>
+            <th>Targets</th>
             <th>Evidence</th>
+            <th>Run</th>
           </tr>
         </thead>
         <tbody>
-          {% for d in defenses %}
+          {% for g in defenses %}
           <tr>
-            <td class="ts">{{ d.attempted_at | pst }}</td>
-            <td>
-              {% if d.cwe_id %}
-                <a class="cwe-chip"
-                   href="https://cwe.mitre.org/data/definitions/{{ d.cwe_id | replace('CWE-','') }}.html"
-                   target="_blank">{{ d.cwe_id }}</a>
+            <td class="ts">
+              {% if g.run_id %}
+                <a href="/agent-runs/{{ g.run_id }}" style="color:inherit;text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">{{ g.attempted_at | pst }}</a>
               {% else %}
-                <span style="color:#484f58;">—</span>
+                {{ g.attempted_at | pst }}
               {% endif %}
             </td>
-            <td style="max-width:200px;">{{ d.cwe_name }}</td>
-            <td class="rank">{% if d.cwe_rank %}#{{ d.cwe_rank }}{% else %}—{% endif %}</td>
+            <td style="max-width:340px;">
+              {% for c in g.cwes %}
+                {% if c.cwe_id %}
+                  <a class="cwe-chip {% if c.fixed %}{% else %}cwe-chip-red{% endif %}"
+                     href="https://cwe.mitre.org/data/definitions/{{ c.cwe_id | replace('CWE-','') }}.html"
+                     target="_blank"
+                     title="{{ c.cwe_name }}{% if c.fixed %} — fixed{% else %} — NOT fixed{% endif %}">{% if not c.fixed %}⚠ {% endif %}{{ c.cwe_id }}</a>
+                {% else %}
+                  <span style="color:#484f58;">—</span>
+                {% endif %}
+                {% if not loop.last %} {% endif %}
+              {% endfor %}
+            </td>
             <td>
-              {% if d.fixed %}
-                <span class="badge" style="background:#1a4a1f;color:#3fb950;">fixed</span>
+              {% if g.fixed_count == g.total_count %}
+                <span class="badge" style="background:#1a4a1f;color:#3fb950;">{{ g.fixed_count }}/{{ g.total_count }} fixed</span>
+              {% elif g.fixed_count == 0 %}
+                <span class="badge" style="background:#3d2f00;color:#d29922;">0/{{ g.total_count }} fixed</span>
               {% else %}
-                <span class="badge" style="background:#3d2f00;color:#d29922;">not fixed</span>
+                <span class="badge" style="background:#3d2f00;color:#d29922;">{{ g.fixed_count }}/{{ g.total_count }} fixed</span>
               {% endif %}
             </td>
-            <td class="payload" title="{{ d.target_url }}">{{ d.target_url }}</td>
-            <td class="evidence" title="{{ d.evidence }}">
-              {{ d.evidence[:160] }}{% if d.evidence|length > 160 %}&hellip;{% endif %}
+            <td class="payload" title="{{ g.target_urls | join(', ') }}">{{ g.target_urls | join(', ') }}</td>
+            <td class="evidence" title="{{ g.evidences | join(' \n--- \n') }}">
+              {% if g.evidences %}
+                {{ g.evidences[0][:160] }}{% if g.evidences[0]|length > 160 %}&hellip;{% endif %}
+                {% if g.evidences|length > 1 %}<span style="color:#484f58;"> (+{{ g.evidences|length - 1 }} more)</span>{% endif %}
+              {% else %}—{% endif %}
+            </td>
+            <td style="white-space:nowrap;">
+              {% if g.run_id %}
+                <a href="/agent-runs/{{ g.run_id }}" style="color:#58a6ff; font-size:.75rem; text-decoration:none;">Details &rarr;</a>
+              {% else %}
+                <span style="color:#484f58; font-size:.75rem;">—</span>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}

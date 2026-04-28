@@ -285,7 +285,8 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions, jitter
         update('running', f'{cwe_id} / mode={mode}')
         from agent import run_agent
         run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions,
-                  on_progress=on_progress, on_ask_user=on_ask_user, stop_event=stop_event)
+                  on_progress=on_progress, on_ask_user=on_ask_user, stop_event=stop_event,
+                  run_id=run_id)
         if stop_event.is_set():
             update('stopped', 'stopped by user')
             final_status = 'stopped'

@@ -13,6 +13,13 @@ _INCLUDE_EXT = {'.py', '.html', '.css', '.js', '.txt', '.ddl', '.yaml', '.yml'}
 
 def list_files(directory=None):
     base = directory or CODEBASE_DIR
+    if not os.path.isdir(base):
+        # Try to be helpful: list the closest existing ancestor.
+        parent = base
+        while parent and parent != '/' and not os.path.isdir(parent):
+            parent = os.path.dirname(parent)
+        hint = f' Closest existing dir: {parent}' if parent else ''
+        return f'(directory not found: {base}.{hint})'
     result = []
     for root, dirs, files in os.walk(base):
         dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
@@ -24,18 +31,40 @@ def list_files(directory=None):
 
 def read_file(path):
     # Resolve relative paths against CODEBASE_DIR
+    orig = path
     if not os.path.isabs(path):
         path = os.path.join(CODEBASE_DIR, path)
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.read()
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        # Help the agent recover: list siblings in the parent dir if it exists.
+        parent = os.path.dirname(path)
+        if os.path.isdir(parent):
+            try:
+                siblings = [n for n in os.listdir(parent) if not n.startswith('.')]
+            except OSError:
+                siblings = []
+            return (f'(file not found: {orig}. Parent dir {parent} exists; '
+                    f'contents: {sorted(siblings)[:30]}. Use list_files for full enumeration.)')
+        return f'(file not found: {orig}. Parent dir {parent} does not exist either.)'
+    except IsADirectoryError:
+        return f'(path is a directory, not a file: {orig}. Use list_files instead.)'
+    except OSError as e:
+        return f'(read_file error on {orig}: {e})'
 
 
 def write_file(path, content):
+    orig = path
     if not os.path.isabs(path):
         path = os.path.join(CODEBASE_DIR, path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(content)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except OSError as e:
+        logger.warning(f'write_file failed on {path}: {e}')
+        return f'(write_file error on {orig}: {e})'
     logger.info(f'write_file: {path} ({len(content)} bytes)')
     return f'Written {len(content)} bytes to {path}'
 

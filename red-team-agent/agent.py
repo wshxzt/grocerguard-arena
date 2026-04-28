@@ -181,7 +181,7 @@ def _summarize_inputs(name, inputs):
     return {k: str(v)[:120] for k, v in inputs.items()}
 
 
-def dispatch_tool(name, inputs, cwe_id=None, on_ask_user=None):
+def dispatch_tool(name, inputs, cwe_id=None, on_ask_user=None, run_id=None):
     logger.info(f'Tool call: {name}({list(inputs.keys())})')
     if name == 'list_files':
         return list_files(inputs.get('directory'))
@@ -220,13 +220,14 @@ def dispatch_tool(name, inputs, cwe_id=None, on_ask_user=None):
             payload=inputs.get('payload', ''),
             status=inputs['status'],
             evidence=inputs['evidence'],
+            run_id=run_id,
         )
-        return f"Finding logged: {inputs['cwe_id']} — {inputs['status']}"
+        return f"Finding logged: {inputs['cwe_id']} — {inputs['status']} (run_id={run_id})"
     return f'Unknown tool: {name}'
 
 
-def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_progress=None, on_ask_user=None, stop_event=None):
-    logger.info(f'Starting agent: {cwe_id} ({cwe_name}), mode={mode}')
+def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_progress=None, on_ask_user=None, stop_event=None, run_id=None):
+    logger.info(f'Starting agent: {cwe_id} ({cwe_name}), mode={mode}, run_id={run_id}')
 
     mode = mode if mode in _MODE_INSTRUCTIONS else 'both'
     system = _SYSTEM_BASE + '\n' + _MODE_INSTRUCTIONS[mode]
@@ -307,7 +308,7 @@ def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_prog
         for block in response.content:
             if block.type != 'tool_use':
                 continue
-            result = dispatch_tool(block.name, block.input, cwe_id=cwe_id, on_ask_user=on_ask_user)
+            result = dispatch_tool(block.name, block.input, cwe_id=cwe_id, on_ask_user=on_ask_user, run_id=run_id)
             tool_results.append({
                 'type': 'tool_result',
                 'tool_use_id': block.id,

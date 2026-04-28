@@ -1,10 +1,16 @@
-"""Blue team agent — SequentialAgent pipeline: Gather → Analyze → Loop(Patch, Verify)."""
+"""Blue team agent — SequentialAgent pipeline: Gather → Analyze → Loop(Patch, Verify) → Refine."""
 import os
 import logging
+import contextvars
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 _PST = ZoneInfo('America/Los_Angeles')
+
+# Set in run_agent() per call so per-run tools can find their callbacks.
+_ask_user_cv: contextvars.ContextVar = contextvars.ContextVar('ask_user_cb', default=None)
+_cwe_progress_cv: contextvars.ContextVar = contextvars.ContextVar('cwe_progress_cb', default=None)
+_run_id_cv: contextvars.ContextVar = contextvars.ContextVar('run_id', default=None)
 
 os.environ.setdefault('GOOGLE_GENAI_USE_VERTEXAI', '1')
 os.environ.setdefault('GOOGLE_CLOUD_PROJECT', 'zhiting-personal')
@@ -175,10 +181,47 @@ def get_cwe_plans() -> str:
     """Read known CWE plans from the registry, sorted by rank ascending. Each plan has cwe_id, name, rank, suspect_paths, code_patterns, log_patterns, plan_notes."""
     return str(db.get_cwe_plans())
 
+def ask_user(question: str) -> str:
+    """Ask the human user a short question and return their reply. Use sparingly — only for confirming impactful actions like updating the CWE registry. Returns the user's text reply, or an empty string if no user is connected or no reply within 5 minutes (treat empty reply as 'no')."""
+    cb = _ask_user_cv.get()
+    if cb is None:
+        logger.info('ask_user called but no callback registered — returning empty')
+        return ''
+    return cb(question)
+
+def update_cwe_plan_notes(cwe_id: str, addition: str) -> str:
+    """Append a refinement note to a CWE's plan_notes in the registry. Use only after the user approves."""
+    return db.update_cwe_plan_notes(cwe_id, addition)
+
+def update_cwe_code_patterns(cwe_id: str, new_patterns: list[str]) -> str:
+    """Add new substring code patterns to a CWE's code_patterns array in the registry. Use only after the user approves."""
+    return db.update_cwe_code_patterns(cwe_id, new_patterns)
+
+def mark_cwe_status(cwe_id: str, status: str, note: str = '') -> str:
+    """Update live progress for a single CWE candidate so the operator can see how analyze is moving.
+
+    Call this:
+      - status='analyzing' when you START investigating a candidate (i.e. before searching its code_patterns).
+      - status='confirmed' when you CONFIRM the candidate (Path A or Path B).
+      - status='ruled_out' when you decide the candidate is a false positive.
+
+    `note` is a one-line reason (especially useful for ruled_out)."""
+    valid = {'analyzing', 'confirmed', 'ruled_out'}
+    if status not in valid:
+        return f'invalid status — must be one of {sorted(valid)}'
+    cb = _cwe_progress_cv.get()
+    if cb is None:
+        return 'no progress tracker connected'
+    cb(cwe_id, status, note)
+    return f'marked {cwe_id} as {status}'
+
 def log_defense(attack_id: str, target_url: str, fixed: bool, evidence: str) -> str:
-    """Record a successful defense to the database. Set attack_id to empty string if unknown."""
-    db.log_defense(attack_id=attack_id, target_url=target_url, fixed=fixed, evidence=evidence)
-    return f"Defense logged for attack_id={attack_id}"
+    """Record a defense outcome to the database. Set attack_id to empty string if unknown.
+    The current run_id is attached automatically so multiple defenses from one scan group together."""
+    run_id = _run_id_cv.get()
+    db.log_defense(attack_id=attack_id, target_url=target_url, fixed=fixed,
+                   evidence=evidence, run_id=run_id)
+    return f"Defense logged for attack_id={attack_id} (run_id={run_id})"
 
 
 # ── Agent instructions ─────────────────────────────────────────────────────────
@@ -200,65 +243,140 @@ You are the Analyze phase. The Gather phase produced this PLAN of candidate CWEs
 
 The deployed codebase is at /tmp/inspections/grocerguard/app/.
 
-Execute the plan ONE CANDIDATE AT A TIME, in priority order (CANDIDATE 1, then 2, etc). For EACH candidate:
+Walk through EVERY candidate in the plan, in the order given (priority order). For EACH candidate, run the 4-step protocol below and decide whether it's confirmed. Collect ALL confirmed vulnerabilities — do NOT stop at the first one. The patch phase will fix all of them in a single pass.
 
-1. Read the suspect files with read_file. Trace user input from request handlers (request.args / request.form / request.json) all the way through to the dangerous sink (DB query, template render, subprocess call, file open).
+PER-CANDIDATE PROTOCOL — do these in order:
 
-2. Run the candidate's planned log searches with search_service_logs("grocerguard", <pattern>) to look for actual attack evidence in URLs and stdout.
+STEP 0 — mark this candidate as in-progress so the operator sees live status:
+   call mark_cwe_status(cwe_id=<this candidate's id>, status='analyzing')
+   Do this BEFORE Step 1.
 
-3. Decide: is this CWE PRESENT in the CURRENT deployed code AND exploitable?
-   - PRESENT means the vulnerable code pattern is actually in the file (e.g. user input flows into raw SQL via concatenation, NOT just bound as a parameter).
-   - EXPLOITABLE means a payload could reach it.
-   - Note: parameterized queries (`text(sql)` with `:param` placeholders bound through a params dict) are SAFE even if `text()` is used. Don't flag those.
+STEP 1 — code-pattern hunt (REQUIRED, deterministic):
+   For EACH string in the candidate's `code_patterns` list, call:
+     search_code(pattern=<that string>, directory="/tmp/inspections/grocerguard/app")
+   Record every file:line that matches. A pattern match is a STRONG, DETERMINISTIC signal — the registry's code_patterns are the ground truth for known vulnerable shapes.
+   Zero matches does NOT automatically mean false positive — it just means the plan's known patterns aren't present. Continue to Step 2 anyway; the agent-discovery path below can still confirm a vuln.
 
-CRITICAL: As soon as you CONFIRM ONE candidate is real, STOP IMMEDIATELY. Output the diagnosis in the format below and end your turn. Do NOT continue checking other candidates — the patch phase will fix this one, and the next pipeline run can find the next.
+STEP 2 — classify findings. There are TWO independent paths to a confirmation; both can fire per candidate.
 
-If a candidate is a false positive (heuristic flagged it but the code is actually safe, OR no exploit path), record it briefly in your reasoning and move to the next candidate.
+   PATH A (plan-confirmed) — reserved for Step 1 matches:
+     For EACH match from Step 1, read the file in full with read_file. Then check the match against `plan_notes`:
+       • If plan_notes describes this pattern's shape as unconditionally vulnerable (e.g. `| safe` rendering user/DB input) → CONFIRMED (plan-confirmed).
+       • If plan_notes describes a safe sub-case (e.g. `text(sql)` is safe when used with `:param` binding + a params dict) → check the actual surrounding code for that sub-case. If it's the safe sub-case, false positive. Otherwise CONFIRMED (plan-confirmed).
+     plan_notes is authoritative for known shapes. Trust the pattern match — only rule out a match when the plan_notes safe sub-case clearly applies.
 
-Output format when you confirm:
+   PATH B (agent-discovered) — independent of Step 1:
+     Open files in the candidate's `suspect_paths` (and any related route handlers / templates / utility modules) and read them with read_file. The suspect_paths may contain GLOB patterns (e.g. `app/routes/*.py`) — DO NOT pass a glob to read_file. First call list_files on the directory to enumerate the real filenames (e.g. list_files('/tmp/inspections/grocerguard/app/app/routes')), then read each one. Never guess filenames like 'main.py' that you haven't verified exist.
+     If you (the model) spot a vulnerability the existing patterns + plan_notes did NOT precisely cover — but you are clearly confident it's exploitable — mark it CONFIRMED (agent-discovered). This path is what catches gaps in the registry and feeds PLAN_REFINEMENT.
+     Sub-case: if a Step-1 match also reveals a vulnerability shape DIFFERENT from what plan_notes describes, that additional shape is also agent-discovered.
 
-CONFIRMED: <CWE-ID> (<name>)
-File: <path relative to /tmp/inspections/grocerguard/app/, e.g. app/routes/products.py>
-Line: <line number of the vulnerable code>
+   A single candidate may produce findings via Path A, Path B, or both. Each finding is one entry in the consolidated list.
+
+STEP 3 — forensic correlation (optional):
+   Run the candidate's `log_patterns` via search_service_logs("grocerguard", <pattern>) to look for past attack evidence. Strengthens but is not required.
+
+STEP 4 — decide for this candidate:
+   For each finding produced by Path A or Path B in Step 2:
+     EXPLOITABLE = user input can reach the sink (HTTP route → flow → sink).
+     If exploitable, add it to the confirmed list (one entry per finding).
+   If neither path produced any finding for this candidate, it's a false positive — record it briefly and move to the next candidate.
+
+STEP 5 — mark final status for this candidate:
+   - If at least one finding was confirmed: call mark_cwe_status(cwe_id=<id>, status='confirmed')
+   - If false positive / ruled out: call mark_cwe_status(cwe_id=<id>, status='ruled_out', note='<one-line reason>')
+   Then move to the next candidate's Step 0.
+
+After you've gone through every candidate in the plan, output the consolidated diagnosis in the format below.
+
+OUTPUT FORMAT:
+
+If at least one CWE was confirmed, output:
+
+CONFIRMED VULNERABILITIES (<count>):
+
+### 1. <CWE-ID> (<name>)
+File: <path relative to /tmp/inspections/grocerguard/app/>
+Line: <line number>
 Vulnerable code:
 <the actual snippet>
 Attack evidence: <log line showing the attack URL, or "no past attack in logs but code is clearly vulnerable">
-Exploit description: <how an attacker exploits it>
+Exploit description: <how>
+Classification: plan-confirmed | agent-discovered
 
-If ALL candidates were ruled out, output:
+### 2. <CWE-ID> (<name>)
+… same fields …
+
+(continue for every confirmed candidate)
+
+PLAN_REFINEMENTS:
+
+For EACH confirmed candidate that was case (b) — agent-discovered — append one block here. Skip plan-confirmed cases entirely (the existing plan already covers them).
+
+PLAN_REFINEMENT:
+cwe_id: <CWE-ID>
+new_code_patterns: <JSON list of substring patterns the plan was missing — may be []>
+new_plan_notes_addition: <one short paragraph of guidance to APPEND to plan_notes — may be empty>
+reasoning: <one sentence: why the plan was insufficient>
+
+If NO CWE was confirmed, output:
+
 NO CONFIRMED VULNERABILITIES — all candidates checked. <one-line summary per candidate of why ruled out>
 """
 
 _PATCH_INSTRUCTION = f"""
 You are the Patch phase of an automated blue team security pipeline for GrocerGuard.
 
-Diagnosis from the analysis phase:
+Diagnosis from the Analyze phase (may contain MULTIPLE confirmed vulnerabilities):
 {{diagnosis}}
 
-The vulnerability was found in the extracted container at /tmp/inspections/grocerguard/app/<path>. Apply your fix to the equivalent file in the deployable codebase at {CODEBASE_DIR}/<path> — that directory has the Dockerfile and is what gets built and deployed.
+Each vulnerability points to a file in /tmp/inspections/grocerguard/app/<path>. Apply every fix in the deployable codebase at {CODEBASE_DIR}/<path> — that directory has the Dockerfile and is what gets built and deployed.
 
-Steps:
-1. Use read_file to read the vulnerable file at its {CODEBASE_DIR}/... path
-2. Use write_file to apply a minimal, surgical fix — change as few lines as possible
-3. Call deploy() to build and push the patched image to the grocerguard Cloud Run service
-4. If deploy fails, read the error, fix the code, and retry once
+Procedure:
+
+1. For EACH confirmed vulnerability in the diagnosis (in order):
+   a. Call read_file({CODEBASE_DIR}/<path>) to read the current file contents.
+   b. Call write_file({CODEBASE_DIR}/<path>, <new contents>) to apply a minimal, surgical fix — change as few lines as possible. Keep all unrelated code intact.
+   c. If the same file appears in multiple vulnerabilities, fix them all in a SINGLE write_file call (read once, apply all edits, write once) to avoid clobbering earlier fixes.
+
+2. After ALL fixes are written, call deploy() ONCE. A single deploy ships every fix together — do NOT call deploy() multiple times in this turn.
+
+3. If deploy() fails, examine the error, repair the code (read_file + write_file as needed), and call deploy() ONE more time. Do NOT exceed two total deploy calls.
+
+If the diagnosis says "NO CONFIRMED VULNERABILITIES", emit a one-line "no patches to apply" message and end your turn — do not call any tools.
 """
 
 _VERIFY_INSTRUCTION = """
 You are the Verify phase of an automated blue team security pipeline for GrocerGuard.
 
-Diagnosis that was patched:
+Diagnosis that was patched (may contain MULTIPLE confirmed vulnerabilities):
 {diagnosis}
 
-Your job is to confirm the patch works using the red team's actual attack data. This is the first phase in the pipeline with access to red team intel.
+Your job is to confirm EVERY patch works using the red team's actual attack data. This is the first phase with access to red team intel.
 
-Steps:
-1. Call get_recent_attacks(5) to get the red team's payloads and target URLs
-2. Replay those payloads against the live grocerguard service using http_request
-3. If the attack is now blocked or no longer exploitable:
-   - Call log_defense with attack_id, target_url, fixed=True, and evidence of the blocked response
-   - Call exit_loop to complete the pipeline
-4. If the attack still succeeds, describe exactly what still works — the patch phase will run again
+Procedure:
+
+1. Call get_recent_attacks(20) to get the red team's recent payloads and target URLs (one or more per CWE).
+
+2. For EACH vulnerability in the diagnosis, find the matching attack(s) in get_recent_attacks output by cwe_id. Replay each payload against the live service using http_request.
+
+3. For each replayed attack, classify the response and decide:
+
+   a. RESPONSE 5xx (500, 502, 503, 504, etc.): This is NOT proof the attack was blocked — the target is probably mid-deploy, unhealthy, or briefly unreachable. NEVER call log_defense(fixed=True) on a 5xx response.
+      Retry the same payload ONCE (a fresh http_request call). If the retry also returns 5xx, mark this attack as INCONCLUSIVE: call log_defense(attack_id, target_url, fixed=False, evidence='inconclusive: target returned 5xx on both attempts — service likely deploying or unhealthy') and treat the CWE as still-broken so the loop retries.
+
+   b. RESPONSE 2xx/3xx and attack payload is reflected / injection still works (e.g. UNION query results visible, <script> tag present in response body, /etc/passwd contents leaked): the attack still succeeds. log_defense(fixed=False, evidence=<short still-exploitable snippet>) and treat as still-broken.
+
+   c. RESPONSE 2xx/3xx and attack payload is neutralized (escaped, not reflected, returns benign output): the patch worked. log_defense(fixed=True, evidence=<short blocked-response snippet>).
+
+   d. RESPONSE 4xx (400, 403, 404): the route rejected the request. This is usually a valid fix signal IF the rejection appears defense-driven (input validation, auth check). Use judgment — a generic 404 across the whole site (not just for malicious input) is suspicious; the patch may have accidentally broken the route. When in doubt, retry with a benign payload to confirm the route is still alive, then log_defense(fixed=True) only if the malicious payload is rejected while benign requests succeed.
+
+4. If no recent attacks exist for a confirmed CWE, treat it as untestable — note this in your output and consider it FIXED (we patched the code; we just have no replay payload yet).
+
+5. Decide:
+   - If EVERY confirmed vulnerability was either neutralized (fixed=True) or untestable (no payload): call exit_loop. Pipeline complete.
+   - If ANY vulnerability is still exploitable OR inconclusive: do NOT call exit_loop. Output a clear list of what's still broken (and any inconclusive ones) so the patch phase can iterate. The loop will re-run patch then verify.
+
+If the diagnosis says "NO CONFIRMED VULNERABILITIES", emit "nothing to verify" and call exit_loop immediately.
 """
 
 
@@ -278,7 +396,7 @@ analyze_agent = Agent(
     name="analyze",
     model=_model(),
     instruction=_ANALYZE_INSTRUCTION,
-    tools=[list_files, read_file, search_code, search_service_logs],
+    tools=[list_files, read_file, search_code, search_service_logs, mark_cwe_status],
     output_key="diagnosis",
     before_model_callback=_before_model,
     after_model_callback=_after_model,
@@ -308,16 +426,73 @@ patch_verify_loop = LoopAgent(
     max_iterations=3,
 )
 
+_REFINE_INSTRUCTION = """
+You are the Refine phase. You run after the patch/verify loop completes.
+
+The diagnosis from the Analyze phase is:
+
+{diagnosis}
+
+Your purpose: when Analyze flagged "agent-discovered" vulnerabilities (i.e. the existing CWE plans didn't precisely cover them), propose plan updates to the user one CWE at a time. The diagnosis may contain ZERO, ONE, or MORE `PLAN_REFINEMENT:` blocks — handle each independently.
+
+GATING RULE: scan the diagnosis above. If it does NOT contain the literal marker "PLAN_REFINEMENT:", emit "no refinement needed" and END YOUR TURN. Do not call any tools. The plans were already sufficient.
+
+If the diagnosis DOES contain at least one PLAN_REFINEMENT:, do this:
+
+1. Open with a 4-bullet summary of the entire exercise:
+   - CWEs confirmed (count + list)
+   - Files/lines patched
+   - Verify outcome (all neutralized? any still broken?)
+   - Number of plan-refinement candidates to review below
+
+2. For EACH PLAN_REFINEMENT block (in the order they appear), do all of this in sequence. Each iteration MUST issue an ask_user TOOL CALL — not just print the prompt as text. The user only sees a Yes/No button when ask_user is actually invoked as a tool.
+
+   a. Parse the block to extract: cwe_id, new_code_patterns (JSON list), new_plan_notes_addition (string), reasoning (one sentence).
+
+   b. INVOKE the `ask_user` TOOL (do not print this as text). Pass a single-string `question` argument that summarizes the proposed update for THIS one CWE. Example shape (yours can be different in wording, but keep it short and end with "Reply yes/no."):
+
+       ask_user(question="Refine CWE-79 plan?\n• Add code_patterns: ['innerHTML =']\n• Append note: 'React-style innerHTML assignment with user data is XSS.'\nReply yes/no.")
+
+      The tool will block until the user clicks Yes / No / replies. Its return value is the user's reply string (or empty string on timeout).
+
+   c. Read the tool's return value:
+      - If the reply starts with 'y' (case-insensitive — yes/Yes/yep/yeah): apply the updates for THIS CWE by INVOKING the relevant update tools.
+          * If new_code_patterns is non-empty: INVOKE update_cwe_code_patterns(cwe_id, new_code_patterns).
+          * If new_plan_notes_addition is non-empty: INVOKE update_cwe_plan_notes(cwe_id, new_plan_notes_addition).
+          * Briefly summarize each tool's return value as text afterward.
+      - Otherwise (empty / 'n' / 'no' / anything else): output ONE LINE "skipping CWE-X refinement" as text and move to the next block.
+
+   d. Continue to the next PLAN_REFINEMENT block. Each block needs its own ask_user invocation.
+
+CRITICAL: never print "Refine CWE-X plan? … Reply yes/no." as plain text. That is what `ask_user` is for. If you print it as text, the user sees no input controls and the refinement is lost.
+
+3. After all blocks are processed, end your turn.
+
+Keep total output under 500 words across all blocks. Be concise per CWE.
+"""
+
+refine_agent = Agent(
+    name="refine",
+    model=_model(),
+    instruction=_REFINE_INSTRUCTION,
+    tools=[ask_user, update_cwe_plan_notes, update_cwe_code_patterns],
+    before_model_callback=_before_model,
+    after_model_callback=_after_model,
+)
+
 blue_team_agent = SequentialAgent(
     name="blue_team",
-    sub_agents=[gather_agent, analyze_agent, patch_verify_loop],
+    sub_agents=[gather_agent, analyze_agent, patch_verify_loop, refine_agent],
 )
 
 
 # ── Runner ─────────────────────────────────────────────────────────────────────
 
-def run_agent(instructions: str = '', on_progress=None, on_ask_user=None, on_state=None):
-    """Run the pipeline. on_state(key, value) is called for output_key writes (e.g. gather_findings)."""
+def run_agent(instructions: str = '', on_progress=None, on_ask_user=None, on_state=None, on_cwe_progress=None, run_id=None):
+    """Run the pipeline.
+    - on_state(key, value): called when an agent's output_key is written (gather_findings, diagnosis).
+    - on_cwe_progress(cwe_id, status, note): called when analyze marks a candidate's status.
+    - run_id: tagged onto defense_log entries so multi-CWE scans group together on the leaderboard."""
     logger.info('Starting Blue Team Agent pipeline')
 
     def _stamp(steps):
@@ -338,6 +513,10 @@ def run_agent(instructions: str = '', on_progress=None, on_ask_user=None, on_sta
         import asyncio
 
         async def _run():
+            # Register per-run callbacks so the corresponding tools can find them.
+            cv_token = _ask_user_cv.set(on_ask_user) if on_ask_user else None
+            cv_token_progress = _cwe_progress_cv.set(on_cwe_progress) if on_cwe_progress else None
+            cv_token_runid = _run_id_cv.set(run_id) if run_id else None
             session_service = InMemorySessionService()
             runner = Runner(
                 app_name="blue_team_app",
@@ -392,7 +571,7 @@ def run_agent(instructions: str = '', on_progress=None, on_ask_user=None, on_sta
                         step = {
                             'type': 'text',
                             'agent': author,
-                            'text': part.text[:300],
+                            'text': part.text[:2000],
                         }
                         if on_progress:
                             on_progress(_stamp([step]))
@@ -402,6 +581,12 @@ def run_agent(instructions: str = '', on_progress=None, on_ask_user=None, on_sta
                     for k, v in event.actions.state_delta.items():
                         if isinstance(v, str):
                             on_state(k, v)
+            if cv_token is not None:
+                _ask_user_cv.reset(cv_token)
+            if cv_token_progress is not None:
+                _cwe_progress_cv.reset(cv_token_progress)
+            if cv_token_runid is not None:
+                _run_id_cv.reset(cv_token_runid)
             return reply
 
         reply = asyncio.run(_run())
