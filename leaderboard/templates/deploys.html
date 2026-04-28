@@ -64,11 +64,26 @@
 </header>
 
 <div class="container">
-  <p class="section-title">Vulnerability Deploy Log</p>
+  <p class="section-title">
+    {% if team == 'blue' %}Blue Team Deploy Log
+    {% elif team == 'red' %}Red Team Deploy Log
+    {% else %}Deploy Log (All Teams)
+    {% endif %}
+  </p>
   <div class="table-card">
     <div class="table-header">
-      <span class="title">All Deploy Attempts</span>
-      <span class="count">{{ deploys | length }} entries</span>
+      <span class="title">
+        {% if team == 'blue' %}Blue Team Deploy Attempts
+        {% elif team == 'red' %}Red Team Deploy Attempts
+        {% else %}All Deploy Attempts
+        {% endif %}
+      </span>
+      <span style="margin-left:auto; display:flex; gap:.5rem; align-items:center;">
+        <a href="/deploys" style="color:{% if not team %}#58a6ff{% else %}#8b949e{% endif %};font-size:.78rem;text-decoration:none;">All</a>
+        <a href="/deploys?team=red" style="color:{% if team == 'red' %}#f85149{% else %}#8b949e{% endif %};font-size:.78rem;text-decoration:none;">Red</a>
+        <a href="/deploys?team=blue" style="color:{% if team == 'blue' %}#58a6ff{% else %}#8b949e{% endif %};font-size:.78rem;text-decoration:none;">Blue</a>
+        <span class="count">{{ deploys | length }} entries</span>
+      </span>
     </div>
 
     {% if deploys %}
@@ -77,6 +92,7 @@
         <thead>
           <tr>
             <th>Time (PST)</th>
+            <th>Team</th>
             <th>CWE</th>
             <th>Result</th>
             <th>Detail</th>
@@ -87,9 +103,20 @@
           <tr>
             <td class="ts">{{ d.attempted_at | pst }}</td>
             <td>
-              <a class="cwe-chip"
-                 href="https://cwe.mitre.org/data/definitions/{{ d.cwe_id | replace('CWE-','') }}.html"
-                 target="_blank">{{ d.cwe_id }}</a>
+              {% if d.cwe_id == 'blue-team' %}
+                <span class="badge" style="background:#1a2f4a;color:#58a6ff;">Blue</span>
+              {% else %}
+                <span class="badge" style="background:#4a1a1a;color:#f85149;">Red</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if d.cwe_id == 'blue-team' %}
+                <span style="color:#8b949e; font-size:.78rem;">—</span>
+              {% else %}
+                <a class="cwe-chip"
+                   href="https://cwe.mitre.org/data/definitions/{{ d.cwe_id | replace('CWE-','') }}.html"
+                   target="_blank">{{ d.cwe_id }}</a>
+              {% endif %}
             </td>
             <td>
               {% if d.success %}

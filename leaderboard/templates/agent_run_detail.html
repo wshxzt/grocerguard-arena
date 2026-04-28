@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run {{ run.id[:8] }} — GrocerGuard Arena</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+    header { background: #161b22; border-bottom: 1px solid #30363d; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+    header .logo { font-size: 1.1rem; font-weight: 700; }
+    header .logo span { color: #f0883e; }
+    header nav { margin-left: auto; display: flex; gap: 1.5rem; }
+    header nav a { color: #8b949e; text-decoration: none; font-size: .85rem; transition: color .15s; }
+    header nav a:hover { color: #e6edf3; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+    .section-title { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: #8b949e; margin-bottom: 1rem; }
+
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; margin-bottom: 1.25rem; overflow: hidden; }
+    .card-header { padding: .85rem 1.25rem; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+    .badge { display: inline-block; font-size: .7rem; font-weight: 600; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+    .badge-red   { background: #4a1a1a; color: #f85149; }
+    .badge-blue  { background: #1a2f4a; color: #58a6ff; }
+    .badge-done  { background: #1a4a1f; color: #3fb950; }
+    .badge-error { background: #4a1a1a; color: #f85149; }
+    .meta { font-size: .78rem; color: #8b949e; margin-left: auto; }
+    .run-id { font-family: monospace; font-size: .72rem; color: #484f58; }
+
+    .card-body { padding: 1.25rem; }
+    .field { margin-bottom: 1rem; }
+    .field-label { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #8b949e; margin-bottom: .4rem; }
+    .field-value { font-size: .85rem; line-height: 1.6; color: #c9d1d9; word-break: break-word; }
+    .gather-block, .findings-block {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: .85rem 1rem; font-size: .82rem; line-height: 1.6;
+      color: #c9d1d9; white-space: pre-wrap; word-break: break-word;
+      max-height: 600px; overflow-y: auto; font-family: monospace;
+    }
+
+    .step { font-size: .8rem; line-height: 1.5; padding: .55rem .75rem; border-radius: 6px; margin-bottom: .5rem; }
+    .step-text     { background: #0d1f2d; border-left: 3px solid #58a6ff; color: #c9d1d9; }
+    .step-tool     { background: #21262d; border-left: 3px solid #3fb950; font-family: monospace; color: #c9d1d9; }
+    .step-label { font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .25rem; display: flex; justify-content: space-between; align-items: baseline; }
+    .step-text .step-label { color: #58a6ff; }
+    .step-tool .step-label { color: #3fb950; }
+    .step-ts { font-size: .63rem; font-weight: 400; font-family: monospace; opacity: .55; text-transform: none; letter-spacing: 0; }
+    .step-agent { color: #484f58; font-size: .65rem; font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: .3rem; }
+    .step-text-content { white-space: pre-wrap; }
+
+    a.back { color: #58a6ff; font-size: .8rem; text-decoration: none; display: inline-block; margin-bottom: 1rem; }
+    a.back:hover { text-decoration: underline; }
+
+    @media (max-width: 640px) {
+      header { padding: .75rem 1rem; }
+      .container { padding: 1.25rem 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>&#9888;</span> GrocerGuard Arena</div>
+  <nav>
+    <a href="/">Leaderboard</a>
+    <a href="/agent-runs">Run History</a>
+  </nav>
+</header>
+
+<div class="container">
+  <a class="back" href="/agent-runs?team={{ run.team }}">&larr; Back to {{ run.team }} runs</a>
+
+  <div class="card">
+    <div class="card-header">
+      {% if run.team == 'red' %}<span class="badge badge-red">Red Team</span>
+      {% else %}<span class="badge badge-blue">Blue Team</span>{% endif %}
+      {% if run.status == 'done' %}<span class="badge badge-done">{{ run.status }}</span>
+      {% else %}<span class="badge badge-error">{{ run.status }}</span>{% endif %}
+      <span class="meta">
+        {{ run.started_at | pst }} → {{ run.ended_at | pst }} PST
+        {% if run.duration_s is not none %}
+          ({% if run.duration_s < 60 %}{{ run.duration_s }}s{% else %}{{ run.duration_s // 60 }}m {{ run.duration_s % 60 }}s{% endif %})
+        {% endif %}
+        &nbsp;&nbsp;<span class="run-id">{{ run.id }}</span>
+      </span>
+    </div>
+
+    <div class="card-body">
+      {% if run.instructions %}
+      <div class="field">
+        <div class="field-label">Instructions</div>
+        <div class="field-value">{{ run.instructions }}</div>
+      </div>
+      {% endif %}
+
+      {% if run.detail %}
+      <div class="field">
+        <div class="field-label">Detail</div>
+        <div class="field-value">{{ run.detail }}</div>
+      </div>
+      {% endif %}
+
+      {% if run.gather_findings %}
+      <div class="field">
+        <div class="field-label">Gather Findings (CWE Plans)</div>
+        <div class="gather-block">{{ run.gather_findings }}</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <p class="section-title">Steps ({{ run.steps | length }})</p>
+  <div class="card">
+    <div class="card-body">
+      {% if run.steps %}
+        {% for step in run.steps %}
+          {% set stype = step.type if step is mapping else '' %}
+          {% set stext = step.text if step is mapping else step %}
+          {% set sagent = step.agent if step is mapping else '' %}
+          {% if stype == 'tool_call' %}
+          <div class="step step-tool">
+            <div class="step-label">
+              <span>Tool<span class="step-agent">{{ sagent }}</span></span>
+              <span class="step-ts">{{ step.get('ts', '') if step is mapping else '' }}</span>
+            </div>
+            <div class="step-text-content">{{ stext }}</div>
+          </div>
+          {% else %}
+          <div class="step step-text">
+            <div class="step-label">
+              <span>Agent<span class="step-agent">{{ sagent }}</span></span>
+              <span class="step-ts">{{ step.get('ts', '') if step is mapping else '' }}</span>
+            </div>
+            <div class="step-text-content">{{ stext }}</div>
+          </div>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <div style="padding: 2rem; text-align: center; color: #484f58; font-size: .85rem;">No steps recorded.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

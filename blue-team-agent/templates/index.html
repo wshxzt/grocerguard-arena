@@ -224,10 +224,12 @@ function addStatusBubble(text) {
 
 function formatSteps(steps) {
   if (!steps || !steps.length) return '';
-  return '\n\n' + steps.slice(-8).map(s => {
+  return '\n\n' + steps.slice(-6).map(s => {
     const icon = s.type === 'tool_call' ? '🔧' : '💬';
-    return `${icon} ${s.text || ''}`;
-  }).filter(Boolean).join('\n');
+    const agent = s.agent ? ` [${s.agent}]` : '';
+    const text = (s.text || '').slice(0, 220);
+    return `${icon}${agent} ${text}`;
+  }).filter(Boolean).join('\n\n');
 }
 
 async function replyRun(runId) {

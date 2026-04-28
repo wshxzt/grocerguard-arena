@@ -23,6 +23,45 @@ def fetch_service_logs(service_name: str, limit: int = 50) -> str:
         logger.warning(f'fetch_service_logs error: {e}')
         return f"Error: {e}"
 
+def search_service_logs(service_name: str, query: str, limit: int = 30) -> str:
+    """Search Cloud Run service logs for a substring match.
+
+    Use for CWE-specific forensics, e.g.:
+      search_service_logs("grocerguard", "UNION SELECT")  # SQLi
+      search_service_logs("grocerguard", "<script")        # XSS
+      search_service_logs("grocerguard", "; rm ")          # command injection
+      search_service_logs("grocerguard", "../")            # path traversal
+      search_service_logs("grocerguard", "%27")            # URL-encoded quote (SQLi)
+    """
+    logger.info(f'search_service_logs: service={service_name} query={query!r} limit={limit}')
+    project = os.environ.get('SPANNER_PROJECT_ID', 'zhiting-personal')
+    # Search BOTH stdout/stderr (textPayload) AND HTTP request URLs
+    # (httpRequest.requestUrl) — attack payloads usually live in the URL.
+    filter_str = (
+        f'resource.type="cloud_run_revision" '
+        f'AND resource.labels.service_name="{service_name}" '
+        f'AND (textPayload:"{query}" OR httpRequest.requestUrl:"{query}")'
+    )
+    try:
+        result = subprocess.run(
+            ['gcloud', 'logging', 'read', filter_str,
+             '--limit', str(limit),
+             '--format', 'value(timestamp,httpRequest.requestUrl,textPayload)',
+             '--order', 'desc',
+             '--project', project],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        output = result.stdout.strip() if result.stdout else "(no matching log entries)"
+        logger.info(f'search_service_logs: got {len(output.splitlines())} lines for {query!r}')
+        return output
+    except subprocess.CalledProcessError as e:
+        logger.warning(f'search_service_logs failed: {e.stderr[:200]}')
+        return f"Error searching logs: {e.stderr}"
+    except Exception as e:
+        logger.warning(f'search_service_logs error: {e}')
+        return f"Error: {e}"
+
+
 def inspect_deployed_filesystem(service_name: str) -> str:
     """Finds the currently deployed image for a service and uses crane to extract its filesystem to /tmp/inspections/<service_name>."""
     logger.info(f'inspect_deployed_filesystem: service={service_name}')
@@ -78,7 +117,40 @@ def inspect_deployed_filesystem(service_name: str) -> str:
             return f"Error: tar extraction failed: {tar_stderr}"
 
         logger.info(f'inspect_deployed_filesystem: extracted to {out_dir}')
-        return f"Successfully extracted deployed filesystem of {image_url} to {out_dir}. You can now use your list_files and read_file tools on this directory."
+
+        # Sync the deployed app source into CODEBASE_DIR so the patch phase
+        # can read/write files the red team added that aren't in our bundle.
+        extracted_app = os.path.join(out_dir, 'app')
+        codebase_dir = os.environ.get('CODEBASE_DIR', '/workspace/grocerguard-arena/grocerguard-app')
+        synced_msg = ''
+        if os.path.isdir(extracted_app) and codebase_dir:
+            try:
+                _PRESERVE = {'Dockerfile', '.dockerignore', '.gcloudignore'}
+                os.makedirs(codebase_dir, exist_ok=True)
+                # Wipe everything in CODEBASE_DIR except files we always want to keep.
+                for entry in os.listdir(codebase_dir):
+                    if entry in _PRESERVE:
+                        continue
+                    target = os.path.join(codebase_dir, entry)
+                    if os.path.isdir(target):
+                        shutil.rmtree(target)
+                    else:
+                        os.unlink(target)
+                # Copy deployed app contents in.
+                for entry in os.listdir(extracted_app):
+                    src = os.path.join(extracted_app, entry)
+                    dst = os.path.join(codebase_dir, entry)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+                    else:
+                        shutil.copy2(src, dst)
+                logger.info(f'inspect_deployed_filesystem: synced {extracted_app}/ → {codebase_dir}/')
+                synced_msg = f' Synced deployed source into {codebase_dir} (patch phase will read/write here).'
+            except Exception as e:
+                logger.warning(f'inspect_deployed_filesystem: sync to CODEBASE_DIR failed: {e}')
+                synced_msg = f' WARNING: failed to sync deployed source into CODEBASE_DIR: {e}'
+
+        return f"Successfully extracted deployed filesystem of {image_url} to {out_dir}.{synced_msg} You can now use list_files and read_file on either path."
     except Exception as e:
         logger.warning(f'inspect_deployed_filesystem: error: {e}')
         return f"Error: {e}"
@@ -91,20 +163,38 @@ def scan_top_cwes(directory: str) -> str:
 
     results = []
 
-    # 1. CWE-89: SQL Injection (naive check for string formatting in execute calls)
-    sqli_pattern = re.compile(
-        r'\.execute\s*\(\s*f["\'].*\{'
-        r'|\.execute\s*\(\s*["\'].*%'
-        r'|\.execute\s*\(\s*.*\.format\('
-    )
+    # 1. CWE-89: SQL Injection — covers many shapes (Spanner execute_sql, SQLAlchemy
+    # text(), raw .execute(), and f-strings/concat/format/% containing SQL keywords).
+    sqli_patterns = [
+        # .execute / .execute_sql / .execute_update with unsafe formatting
+        re.compile(r'\.execute(_sql|_update)?\s*\(\s*f["\']'),
+        re.compile(r'\.execute(_sql|_update)?\s*\([^)]*\.format\s*\('),
+        re.compile(r'\.execute(_sql|_update)?\s*\([^)]*%\s*[\(\w]'),
+        re.compile(r'\.execute(_sql|_update)?\s*\([^)]*\+\s*\w'),
+        # SQLAlchemy text() with unsafe formatting
+        re.compile(r'\btext\s*\(\s*f["\']'),
+        re.compile(r'\btext\s*\([^)]*\.format\s*\('),
+        re.compile(r'\btext\s*\([^)]*\+\s*\w'),
+        re.compile(r'\btext\s*\([^)]*%\s*[\(\w]'),
+        # f-string or concat/format directly assembling a SQL keyword string
+        re.compile(r'f["\'][^"\']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\b', re.IGNORECASE),
+        re.compile(r'["\'][^"\']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\b[^"\']*["\']\s*[%+]', re.IGNORECASE),
+        re.compile(r'["\'][^"\']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\b[^"\']*["\']\s*\.\s*format\s*\(', re.IGNORECASE),
+    ]
 
-    # 2. CWE-79: XSS (naive check for |safe in Jinja templates)
-    xss_pattern = re.compile(r'\{\{.*\|safe\s*\}\}')
+    # 2. CWE-79: XSS — Jinja `|safe`, autoescape off, or Markup() with user input.
+    xss_patterns = [
+        re.compile(r'\{\{[^}]*\|\s*safe\s*\}\}'),
+        re.compile(r'\{%\s*autoescape\s+false\s*%\}', re.IGNORECASE),
+        re.compile(r'\bMarkup\s*\([^)]*[\+%f]'),
+    ]
 
-    # 3. CWE-78: OS Command Injection (naive check for shell=True or os.system)
-    cmd_inj_pattern = re.compile(
-        r'os\.system\s*\(|subprocess\.(Popen|run|call)\s*\([^)]*shell\s*=\s*True'
-    )
+    # 3. CWE-78: OS Command Injection — os.system, shell=True, popen.
+    cmd_inj_patterns = [
+        re.compile(r'os\.system\s*\('),
+        re.compile(r'subprocess\.(Popen|run|call|check_output)\s*\([^)]*shell\s*=\s*True'),
+        re.compile(r'os\.popen\s*\('),
+    ]
 
     for root, _, files in os.walk(directory):
         if '/venv' in root or '/.git' in root or '__pycache__' in root:
@@ -120,15 +210,15 @@ def scan_top_cwes(directory: str) -> str:
 
                 if file.endswith('.py'):
                     for i, line in enumerate(content.splitlines()):
-                        if sqli_pattern.search(line):
-                            results.append(f"Potential CWE-89 (SQLi) at {filepath}:{i+1} -> {line.strip()}")
-                        if cmd_inj_pattern.search(line):
-                            results.append(f"Potential CWE-78 (OS Cmd Inj) at {filepath}:{i+1} -> {line.strip()}")
+                        if any(p.search(line) for p in sqli_patterns):
+                            results.append(f"Potential CWE-89 (SQLi) at {filepath}:{i+1} -> {line.strip()[:200]}")
+                        if any(p.search(line) for p in cmd_inj_patterns):
+                            results.append(f"Potential CWE-78 (OS Cmd Inj) at {filepath}:{i+1} -> {line.strip()[:200]}")
 
                 elif file.endswith('.html'):
                     for i, line in enumerate(content.splitlines()):
-                        if xss_pattern.search(line):
-                            results.append(f"Potential CWE-79 (XSS) at {filepath}:{i+1} -> {line.strip()}")
+                        if any(p.search(line) for p in xss_patterns):
+                            results.append(f"Potential CWE-79 (XSS) at {filepath}:{i+1} -> {line.strip()[:200]}")
             except Exception:
                 pass
 

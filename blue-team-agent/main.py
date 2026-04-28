@@ -9,7 +9,7 @@ import uuid
 # Must be set before any ADK imports so the SDK uses Vertex AI instead of AI Studio.
 os.environ.setdefault('GOOGLE_GENAI_USE_VERTEXAI', '1')
 os.environ.setdefault('GOOGLE_CLOUD_PROJECT', 'zhiting-personal')
-os.environ.setdefault('GOOGLE_CLOUD_LOCATION', 'us-central1')
+os.environ.setdefault('GOOGLE_CLOUD_LOCATION', 'global')
 os.environ.setdefault('GOOGLE_ADK_DISABLE_TELEMETRY', '1')
 os.environ.setdefault('OTEL_SDK_DISABLED', 'true')
 
@@ -19,7 +19,84 @@ from flask_limiter.util import get_remote_address
 
 from google.adk.agents import Agent
 from google.adk import Runner
+from google.adk.models.google_llm import Gemini
 from google.adk.sessions import InMemorySessionService
+from google.genai import types as genai_types
+
+MODEL_TIMEOUT_MS = 30000
+
+_RETRY_OPTIONS = genai_types.HttpRetryOptions(
+    attempts=4,
+    initial_delay=2.0,
+    max_delay=30.0,
+    exp_base=2.0,
+    jitter=0.1,
+    http_status_codes=[429, 500, 502, 503, 504],
+)
+
+
+def _before_model(callback_context, llm_request):
+    """Force a 30s timeout on every Gemini call AND log the request."""
+    if llm_request.config is None:
+        llm_request.config = genai_types.GenerateContentConfig()
+    if llm_request.config.http_options is None:
+        llm_request.config.http_options = genai_types.HttpOptions()
+    llm_request.config.http_options.timeout = MODEL_TIMEOUT_MS
+
+    agent_name = getattr(callback_context, 'agent_name', '?')
+    contents = llm_request.contents or []
+    last_msg = ''
+    if contents:
+        for part in (contents[-1].parts or []):
+            if getattr(part, 'function_response', None):
+                last_msg = f'[fn_response] {part.function_response.name}'
+                break
+            if getattr(part, 'function_call', None):
+                last_msg = f'[fn_call] {part.function_call.name}'
+                break
+            if getattr(part, 'text', None):
+                last_msg = part.text
+                break
+    tools = list(llm_request.tools_dict.keys()) if llm_request.tools_dict else []
+    logger.info(
+        f'[{agent_name}] LLM REQUEST → model={llm_request.model} '
+        f'contents={len(contents)} tools={tools} last_msg={last_msg[:200]!r}'
+    )
+    return None
+
+
+def _after_model(callback_context, llm_response):
+    """Log the model response (parts, finish reason, token usage, errors)."""
+    agent_name = getattr(callback_context, 'agent_name', '?')
+
+    parts_summary = []
+    if llm_response.content and llm_response.content.parts:
+        for part in llm_response.content.parts:
+            fc = getattr(part, 'function_call', None)
+            if fc:
+                args_preview = str(dict(fc.args or {}))[:200]
+                parts_summary.append(f'fn_call={fc.name}({args_preview})')
+                continue
+            text = getattr(part, 'text', None)
+            if text:
+                parts_summary.append(f'text={text[:200]!r}')
+
+    usage = ''
+    um = llm_response.usage_metadata
+    if um:
+        usage = (f' tokens={getattr(um, "prompt_token_count", "?")}'
+                 f'/{getattr(um, "candidates_token_count", "?")}'
+                 f'/{getattr(um, "total_token_count", "?")}')
+
+    err = ''
+    if llm_response.error_code:
+        err = f' ERROR={llm_response.error_code}: {llm_response.error_message}'
+
+    logger.info(
+        f'[{agent_name}] LLM RESPONSE → finish={llm_response.finish_reason}{usage}{err} '
+        f'parts=[{"; ".join(parts_summary) or "(empty)"}]'
+    )
+    return None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,9 +161,11 @@ def get_status(run_id: str = "") -> str:
 
 chat_agent = Agent(
     name="chat_assistant",
-    model="gemini-2.5-flash",
+    model=Gemini(model='gemini-2.5-flash', retry_options=_RETRY_OPTIONS),
     instruction=_CHAT_SYSTEM,
-    tools=[trigger_scan, get_status]
+    tools=[trigger_scan, get_status],
+    before_model_callback=_before_model,
+    after_model_callback=_after_model,
 )
 
 # ── Background Execution & Autonomous Scanner ──────────────────────────────────
@@ -96,6 +175,7 @@ def _execute_run(run_id, instructions=''):
 
     last_progress = [time.time()]
     stop_watchdog = threading.Event()
+    state_captures = {}  # output_key → value, captured from agent state deltas
 
     def update(status, detail=''):
         with _runs_lock:
@@ -114,7 +194,7 @@ def _execute_run(run_id, instructions=''):
             if stype == 'tool_call':
                 logger.info(f'Run {run_id} step [{stype}]: {stext[:200]}')
 
-    # Tools known to take a while; suppress watchdog warning while they're running.
+    # Tools known to take a while; the watchdog gives them a longer leash.
     _SLOW_TOOLS = {'inspect_deployed_filesystem', 'deploy'}
 
     def watchdog():
@@ -127,12 +207,22 @@ def _execute_run(run_id, instructions=''):
             if status != 'running':
                 continue
             idle = int(time.time() - last_progress[0])
-            threshold = 360 if (last_step and any(t in last_step.get('text','') for t in _SLOW_TOOLS)) else 60
+
+            last_text = last_step.get('text', '') if last_step else ''
+            is_tool = last_step and last_step.get('type') == 'tool_call'
+            is_slow_tool = is_tool and any(t in last_text for t in _SLOW_TOOLS)
+
+            if is_slow_tool:
+                threshold, label = 360, 'slow tool'
+            elif is_tool:
+                threshold, label = 120, 'tool call'
+            else:
+                threshold, label = 60, 'Gemini call (silent 429 retry / slow response)'
+
             if idle >= threshold and (time.time() - last_warned_at) >= 60:
-                if last_step and last_step.get('type') == 'tool_call':
-                    msg = f'⏳ No progress for {idle}s — last step was a slow tool: {last_step.get("text","")[:120]}'
-                else:
-                    msg = f'⏳ No progress for {idle}s — agent likely waiting on Gemini (silent 429 retry / slow response)'
+                last_preview = last_text[:120] if is_tool else ''
+                msg = (f'⏳ No progress for {idle}s — waiting on {label}'
+                       + (f': {last_preview}' if last_preview else ''))
                 logger.warning(f'Run {run_id} watchdog: {msg}')
                 with _runs_lock:
                     _runs[run_id]['steps'] = (
@@ -161,11 +251,17 @@ def _execute_run(run_id, instructions=''):
 
     threading.Thread(target=watchdog, daemon=True).start()
 
+    def on_state(key, value):
+        state_captures[key] = value
+
+    final_status = 'error'
     try:
         update('running')
         from agent import run_agent
-        run_agent(instructions=instructions, on_progress=on_progress, on_ask_user=on_ask_user)
+        run_agent(instructions=instructions, on_progress=on_progress,
+                  on_ask_user=on_ask_user, on_state=on_state)
         update('done')
+        final_status = 'done'
         logger.info(f'Run {run_id} finished successfully')
     except Exception as e:
         logger.exception(f'Run {run_id} failed')
@@ -173,6 +269,27 @@ def _execute_run(run_id, instructions=''):
     finally:
         stop_watchdog.set()
         _run_reply_events.pop(run_id, None)
+        # Persist completed run to Spanner
+        try:
+            import db
+            from datetime import datetime as _dt
+            with _runs_lock:
+                run = _runs.get(run_id, {})
+                started_str = run.get('started_at', '')
+                started = _dt.fromisoformat(started_str.replace('Z', '+00:00')) if started_str else _dt.utcnow()
+                db.save_agent_run(
+                    run_id=run_id,
+                    team='blue',
+                    status=final_status,
+                    instructions=run.get('instructions', ''),
+                    detail=run.get('detail', ''),
+                    gather_findings=state_captures.get('gather_findings', ''),
+                    steps=run.get('steps', []),
+                    started_at=started,
+                )
+            logger.info(f'Run {run_id} persisted to agent_runs')
+        except Exception as e:
+            logger.warning(f'Run {run_id} save_agent_run failed: {e}')
 
 
 

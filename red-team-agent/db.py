@@ -84,3 +84,21 @@ def log_deploy(cwe_id, success, detail=''):
             columns=['id', 'cwe_id', 'attempted_at', 'success', 'detail'],
             values=[(str(uuid.uuid4()), cwe_id, now, success, detail[:500])]
         )
+
+
+def save_agent_run(run_id, team, status, instructions, detail, gather_findings, steps, started_at):
+    """Persist a completed agent run to agent_runs."""
+    import json
+    now = datetime.now(timezone.utc)
+    if started_at and started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    with get_db().batch() as batch:
+        batch.insert(
+            table='agent_runs',
+            columns=['id', 'team', 'status', 'instructions', 'detail',
+                     'gather_findings', 'steps_json', 'started_at', 'ended_at'],
+            values=[(run_id, team, status, instructions or '', (detail or '')[:5000],
+                     (gather_findings or '')[:50000],
+                     json.dumps(steps)[:200000],
+                     started_at, now)]
+        )

@@ -77,6 +77,8 @@ When the user asks to start / run / launch an attack, use start_attack.
 When the user asks about status, results, or what is happening, use get_status.
 For anything else, answer directly.
 
+For start_attack: only set cwe_id if the user explicitly named a CWE (by ID like "CWE-352" or by name like "CSRF", "SQL injection"). For generic asks like "run an attack" or "start a scan", omit cwe_id entirely — the server will pick the next applicable CWE.
+
 Be concise. No markdown headers."""
 
 _CHAT_TOOLS = [
@@ -91,7 +93,7 @@ _CHAT_TOOLS = [
                     'enum': ['inject', 'attack', 'both'],
                     'description': 'inject=code change + deploy only, attack=attack existing vuln, both=full pipeline',
                 },
-                'cwe_id':      {'type': 'string', 'description': 'Optional CWE to target, e.g. CWE-79.'},
+                'cwe_id':      {'type': 'string', 'description': 'OPTIONAL. Only set this if the user explicitly named a specific CWE (like "CWE-352" or "CSRF"). For generic requests like "run an attack" or "start a scan", LEAVE THIS BLANK so the server picks the next applicable CWE in priority order — never default to a specific CWE on your own.'},
                 'instructions':{'type': 'string', 'description': 'Specific guidance for the agent.'},
             },
             'required': ['mode'],
@@ -209,6 +211,7 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions, jitter
         logger.info(f'Run {run_id} got user reply: {reply[:80]}')
         return reply
 
+    final_status = 'error'
     try:
         if jitter_seconds > 0:
             delay = random.randint(0, jitter_seconds)
@@ -224,11 +227,37 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions, jitter
         run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions,
                   on_progress=on_progress, on_ask_user=on_ask_user)
         update('done')
+        final_status = 'done'
     except Exception as e:
         logger.exception(f'Run {run_id} failed')
         update('error', str(e))
     finally:
         _run_reply_events.pop(run_id, None)
+        # Persist completed run to Spanner
+        try:
+            import db
+            from datetime import datetime as _dt
+            with _runs_lock:
+                run = _runs.get(run_id, {})
+                started_str = run.get('started_at', '')
+                started = _dt.fromisoformat(started_str.replace('Z', '+00:00')) if started_str else _dt.utcnow()
+                run_instructions = (
+                    f'{cwe_id} / mode={mode}'
+                    + (f' / {instructions[:200]}' if instructions else '')
+                )
+                db.save_agent_run(
+                    run_id=run_id,
+                    team='red',
+                    status=final_status,
+                    instructions=run_instructions,
+                    detail=run.get('detail', ''),
+                    gather_findings='',
+                    steps=run.get('steps', []),
+                    started_at=started,
+                )
+            logger.info(f'Run {run_id} persisted to agent_runs')
+        except Exception as e:
+            logger.warning(f'Run {run_id} save_agent_run failed: {e}')
 
 
 # ── auth helper ───────────────────────────────────────────────────────────────

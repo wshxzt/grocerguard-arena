@@ -1,17 +1,102 @@
 """Blue team agent — SequentialAgent pipeline: Gather → Analyze → Loop(Patch, Verify)."""
 import os
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_PST = ZoneInfo('America/Los_Angeles')
 
 os.environ.setdefault('GOOGLE_GENAI_USE_VERTEXAI', '1')
 os.environ.setdefault('GOOGLE_CLOUD_PROJECT', 'zhiting-personal')
-os.environ.setdefault('GOOGLE_CLOUD_LOCATION', 'us-central1')
+os.environ.setdefault('GOOGLE_CLOUD_LOCATION', 'global')
 os.environ.setdefault('GOOGLE_ADK_DISABLE_TELEMETRY', '1')
 os.environ.setdefault('OTEL_SDK_DISABLED', 'true')
 
 from google.adk.agents import Agent, SequentialAgent, LoopAgent
 from google.adk import Runner
+from google.adk.models.google_llm import Gemini
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools.exit_loop_tool import exit_loop
+from google.genai import types as genai_types
+
+MODEL_TIMEOUT_MS = 30000
+
+_RETRY_OPTIONS = genai_types.HttpRetryOptions(
+    attempts=4,
+    initial_delay=2.0,
+    max_delay=30.0,
+    exp_base=2.0,
+    jitter=0.1,
+    http_status_codes=[429, 500, 502, 503, 504],
+)
+
+
+def _model():
+    return Gemini(model='gemini-2.5-flash', retry_options=_RETRY_OPTIONS)
+
+
+def _before_model(callback_context, llm_request):
+    """Force a 30s timeout on every Gemini call AND log the request."""
+    if llm_request.config is None:
+        llm_request.config = genai_types.GenerateContentConfig()
+    if llm_request.config.http_options is None:
+        llm_request.config.http_options = genai_types.HttpOptions()
+    llm_request.config.http_options.timeout = MODEL_TIMEOUT_MS
+
+    agent_name = getattr(callback_context, 'agent_name', '?')
+    contents = llm_request.contents or []
+    last_msg = ''
+    if contents:
+        for part in (contents[-1].parts or []):
+            if getattr(part, 'function_response', None):
+                last_msg = f'[fn_response] {part.function_response.name}'
+                break
+            if getattr(part, 'function_call', None):
+                last_msg = f'[fn_call] {part.function_call.name}'
+                break
+            if getattr(part, 'text', None):
+                last_msg = part.text
+                break
+    tools = list(llm_request.tools_dict.keys()) if llm_request.tools_dict else []
+    logger.info(
+        f'[{agent_name}] LLM REQUEST → model={llm_request.model} '
+        f'contents={len(contents)} tools={tools} last_msg={last_msg[:200]!r}'
+    )
+    return None
+
+
+def _after_model(callback_context, llm_response):
+    """Log the model response (parts, finish reason, token usage, errors)."""
+    agent_name = getattr(callback_context, 'agent_name', '?')
+
+    parts_summary = []
+    if llm_response.content and llm_response.content.parts:
+        for part in llm_response.content.parts:
+            fc = getattr(part, 'function_call', None)
+            if fc:
+                args_preview = str(dict(fc.args or {}))[:200]
+                parts_summary.append(f'fn_call={fc.name}({args_preview})')
+                continue
+            text = getattr(part, 'text', None)
+            if text:
+                parts_summary.append(f'text={text[:200]!r}')
+
+    usage = ''
+    um = llm_response.usage_metadata
+    if um:
+        usage = (f' tokens={getattr(um, "prompt_token_count", "?")}'
+                 f'/{getattr(um, "candidates_token_count", "?")}'
+                 f'/{getattr(um, "total_token_count", "?")}')
+
+    err = ''
+    if llm_response.error_code:
+        err = f' ERROR={llm_response.error_code}: {llm_response.error_message}'
+
+    logger.info(
+        f'[{agent_name}] LLM RESPONSE → finish={llm_response.finish_reason}{usage}{err} '
+        f'parts=[{"; ".join(parts_summary) or "(empty)"}]'
+    )
+    return None
 
 import db
 from tools.codebase import (
@@ -26,6 +111,7 @@ from tools.skills import (
     fetch_service_logs as _fetch_service_logs,
     inspect_deployed_filesystem as _inspect_deployed_filesystem,
     scan_top_cwes as _scan_top_cwes,
+    search_service_logs as _search_service_logs,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +128,10 @@ def inspect_deployed_filesystem(service_name: str) -> str:
 def fetch_service_logs(service_name: str, limit: int = 50) -> str:
     """Fetch recent application logs from a Cloud Run service."""
     return _fetch_service_logs(service_name, limit)
+
+def search_service_logs(service_name: str, query: str, limit: int = 30) -> str:
+    """Search Cloud Run service logs for a substring match. Use for CWE-specific forensics — e.g. 'UNION SELECT' for SQLi, '<script' for XSS, '; rm ' for command injection, '../' for path traversal, '%27' for URL-encoded quote."""
+    return _search_service_logs(service_name, query, limit)
 
 def scan_top_cwes(directory: str) -> str:
     """Run heuristic CWE pattern scans (SQLi, XSS, CMDi) on Python and HTML files in a directory."""
@@ -81,6 +171,10 @@ def get_recent_attacks(limit: int = 5) -> str:
     """Fetch recent red team attacks including payloads and target URLs."""
     return str(db.get_recent_attacks(limit=limit))
 
+def get_cwe_plans() -> str:
+    """Read known CWE plans from the registry, sorted by rank ascending. Each plan has cwe_id, name, rank, suspect_paths, code_patterns, log_patterns, plan_notes."""
+    return str(db.get_cwe_plans())
+
 def log_defense(attack_id: str, target_url: str, fixed: bool, evidence: str) -> str:
     """Record a successful defense to the database. Set attack_id to empty string if unknown."""
     db.log_defense(attack_id=attack_id, target_url=target_url, fixed=fixed, evidence=evidence)
@@ -89,44 +183,50 @@ def log_defense(attack_id: str, target_url: str, fixed: bool, evidence: str) -> 
 
 # ── Agent instructions ─────────────────────────────────────────────────────────
 
-_GATHER_INSTRUCTION = f"""
-You are the Gather phase of an automated blue team security pipeline for GrocerGuard, a Flask/Cloud Spanner grocery web app on Cloud Run.
+_GATHER_INSTRUCTION = """
+You are the Gather phase. Two steps, no investigation.
 
-Your job is to collect raw forensic evidence from the live deployed service. You have NO knowledge of what the red team did — discover it purely from the deployed artifact and logs.
+1. inspect_deployed_filesystem("grocerguard") — extract deployed source to /tmp/inspections/grocerguard/app/
 
-Complete all three steps:
+2. get_cwe_plans() — read known CWE plans from the registry. Each plan has cwe_id, name, rank, suspect_paths, code_patterns, log_patterns, plan_notes.
 
-1. Call inspect_deployed_filesystem("grocerguard") to extract the live container to /tmp/inspections/grocerguard/. The app source will be at /tmp/inspections/grocerguard/app/.
-
-2. Call scan_top_cwes("/tmp/inspections/grocerguard/app") to run heuristic CWE checks on the extracted source.
-
-3. Call fetch_service_logs("grocerguard", 100) to look for anomalous HTTP request patterns in recent logs.
-
-Output a structured findings report:
-- Which files and line numbers were flagged by the CWE scan and what pattern triggered
-- Any anomalies in logs (unusual URLs, error spikes, injection-looking query parameters)
-- Your best assessment of the most likely vulnerability type and location
+Output: dump the plans verbatim, in the order returned (already sorted by rank ascending — top-of-list first). Do NOT investigate, do NOT prioritize beyond the registry order, do NOT add candidates that aren't in the registry. Analyze will iterate this list top-down.
 """
 
 _ANALYZE_INSTRUCTION = f"""
-You are the Analyze phase of an automated blue team security pipeline for GrocerGuard.
+You are the Analyze phase. The Gather phase produced this PLAN of candidate CWEs:
 
-The Gather phase produced these findings:
 {{gather_findings}}
 
-The deployed codebase has been extracted to /tmp/inspections/grocerguard/app/. Use list_files, read_file, and search_code to investigate it.
+The deployed codebase is at /tmp/inspections/grocerguard/app/.
 
-Your job is to pinpoint the exact injected vulnerability:
-1. Start from the files and patterns flagged in the gather findings
-2. Read suspicious files in full — trace user input from HTTP request parameters through to database queries and Jinja2 template rendering
-3. Confirm the vulnerability is real and exploitable, not a heuristic false positive
-4. Identify the precise file path, line number, CWE ID, and the exact vulnerable code
+Execute the plan ONE CANDIDATE AT A TIME, in priority order (CANDIDATE 1, then 2, etc). For EACH candidate:
 
-Output a concise diagnosis:
-- File path relative to /tmp/inspections/grocerguard/app/ (e.g. app/routes/products.py) and line number
-- CWE ID and name
-- The vulnerable code snippet
-- How an attacker would exploit it
+1. Read the suspect files with read_file. Trace user input from request handlers (request.args / request.form / request.json) all the way through to the dangerous sink (DB query, template render, subprocess call, file open).
+
+2. Run the candidate's planned log searches with search_service_logs("grocerguard", <pattern>) to look for actual attack evidence in URLs and stdout.
+
+3. Decide: is this CWE PRESENT in the CURRENT deployed code AND exploitable?
+   - PRESENT means the vulnerable code pattern is actually in the file (e.g. user input flows into raw SQL via concatenation, NOT just bound as a parameter).
+   - EXPLOITABLE means a payload could reach it.
+   - Note: parameterized queries (`text(sql)` with `:param` placeholders bound through a params dict) are SAFE even if `text()` is used. Don't flag those.
+
+CRITICAL: As soon as you CONFIRM ONE candidate is real, STOP IMMEDIATELY. Output the diagnosis in the format below and end your turn. Do NOT continue checking other candidates — the patch phase will fix this one, and the next pipeline run can find the next.
+
+If a candidate is a false positive (heuristic flagged it but the code is actually safe, OR no exploit path), record it briefly in your reasoning and move to the next candidate.
+
+Output format when you confirm:
+
+CONFIRMED: <CWE-ID> (<name>)
+File: <path relative to /tmp/inspections/grocerguard/app/, e.g. app/routes/products.py>
+Line: <line number of the vulnerable code>
+Vulnerable code:
+<the actual snippet>
+Attack evidence: <log line showing the attack URL, or "no past attack in logs but code is clearly vulnerable">
+Exploit description: <how an attacker exploits it>
+
+If ALL candidates were ruled out, output:
+NO CONFIRMED VULNERABILITIES — all candidates checked. <one-line summary per candidate of why ruled out>
 """
 
 _PATCH_INSTRUCTION = f"""
@@ -166,32 +266,40 @@ Steps:
 
 gather_agent = Agent(
     name="gather",
-    model="gemini-2.5-flash",
+    model=_model(),
     instruction=_GATHER_INSTRUCTION,
-    tools=[inspect_deployed_filesystem, scan_top_cwes, fetch_service_logs],
+    tools=[inspect_deployed_filesystem, get_cwe_plans],
     output_key="gather_findings",
+    before_model_callback=_before_model,
+    after_model_callback=_after_model,
 )
 
 analyze_agent = Agent(
     name="analyze",
-    model="gemini-2.5-flash",
+    model=_model(),
     instruction=_ANALYZE_INSTRUCTION,
-    tools=[list_files, read_file, search_code],
+    tools=[list_files, read_file, search_code, search_service_logs],
     output_key="diagnosis",
+    before_model_callback=_before_model,
+    after_model_callback=_after_model,
 )
 
 patch_agent = Agent(
     name="patch",
-    model="gemini-2.5-flash",
+    model=_model(),
     instruction=_PATCH_INSTRUCTION,
-    tools=[read_file, write_file, deploy],
+    tools=[list_files, read_file, search_code, search_service_logs, fetch_service_logs, write_file, http_request, deploy],
+    before_model_callback=_before_model,
+    after_model_callback=_after_model,
 )
 
 verify_agent = Agent(
     name="verify",
-    model="gemini-2.5-flash",
+    model=_model(),
     instruction=_VERIFY_INSTRUCTION,
     tools=[get_recent_attacks, http_request, log_defense, exit_loop],
+    before_model_callback=_before_model,
+    after_model_callback=_after_model,
 )
 
 patch_verify_loop = LoopAgent(
@@ -208,15 +316,22 @@ blue_team_agent = SequentialAgent(
 
 # ── Runner ─────────────────────────────────────────────────────────────────────
 
-def run_agent(instructions: str = '', on_progress=None, on_ask_user=None):
+def run_agent(instructions: str = '', on_progress=None, on_ask_user=None, on_state=None):
+    """Run the pipeline. on_state(key, value) is called for output_key writes (e.g. gather_findings)."""
     logger.info('Starting Blue Team Agent pipeline')
+
+    def _stamp(steps):
+        ts = datetime.now(_PST).strftime('%H:%M:%S')
+        for s in steps:
+            s.setdefault('ts', ts)
+        return steps
 
     user_message = 'Find the recently injected vulnerability, fix it, verify the fix, and log your defense.'
     if instructions:
         user_message += f'\nAdditional instructions:\n{instructions}'
 
     if on_progress:
-        on_progress([{'type': 'text', 'text': 'Blue team pipeline starting: Gather → Analyze → Patch/Verify'}])
+        on_progress(_stamp([{'type': 'text', 'text': 'Blue team pipeline starting: Gather → Analyze → Patch/Verify'}]))
 
     try:
         from google.genai import types
@@ -253,15 +368,15 @@ def run_agent(instructions: str = '', on_progress=None, on_ask_user=None):
                 for part in event.content.parts:
                     if hasattr(part, 'function_call') and part.function_call:
                         fc = part.function_call
-                        args_preview = str(dict(fc.args))[:300]
+                        args_preview = str(dict(fc.args))[:200]
                         logger.info(f'[{author}] tool_call: {fc.name}({args_preview})')
                         step = {
                             'type': 'tool_call',
                             'agent': author,
-                            'text': f'[{author}] {fc.name}({args_preview})',
+                            'text': f'{fc.name}({args_preview})',
                         }
                         if on_progress:
-                            on_progress([step])
+                            on_progress(_stamp([step]))
                     elif hasattr(part, 'function_response') and part.function_response:
                         fr = part.function_response
                         resp = fr.response or {}
@@ -277,17 +392,23 @@ def run_agent(instructions: str = '', on_progress=None, on_ask_user=None):
                         step = {
                             'type': 'text',
                             'agent': author,
-                            'text': f'[{author}] {part.text[:400]}',
+                            'text': part.text[:300],
                         }
                         if on_progress:
-                            on_progress([step])
+                            on_progress(_stamp([step]))
+
+                # After each event, surface any newly written output_keys.
+                if on_state and event.actions and event.actions.state_delta:
+                    for k, v in event.actions.state_delta.items():
+                        if isinstance(v, str):
+                            on_state(k, v)
             return reply
 
         reply = asyncio.run(_run())
 
         logger.info('Blue team pipeline complete')
         if on_progress and reply:
-            on_progress([{'type': 'text', 'text': f'Pipeline complete.\n\n{reply}'}])
+            on_progress(_stamp([{'type': 'text', 'text': f'Pipeline complete.\n\n{reply}'}]))
 
     except Exception as e:
         logger.exception("Agent pipeline failed")

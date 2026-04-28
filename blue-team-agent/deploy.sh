@@ -40,7 +40,7 @@ gcloud run deploy "$SERVICE" \
   --min-instances 1 \
   --max-instances 1 \
   --no-cpu-throttling \
-  --set-env-vars "SPANNER_PROJECT_ID=$PROJECT,SPANNER_INSTANCE_ID=grocerguard-instance,SPANNER_DATABASE_ID=grocerguard,APP_BASE_URL=https://grocerguard-hfzinwetfq-uc.a.run.app,SCAN_INTERVAL_MINUTES=120" \
+  --set-env-vars "SPANNER_PROJECT_ID=$PROJECT,SPANNER_INSTANCE_ID=grocerguard-instance,SPANNER_DATABASE_ID=grocerguard,APP_BASE_URL=https://grocerguard-hfzinwetfq-uc.a.run.app,GCS_BUCKET_NAME=zhiting-personal-grocerguard-images,SCAN_INTERVAL_MINUTES=120" \
   --set-secrets "AGENT_API_KEY=grocerguard-secret-key:latest" \
   --project "$PROJECT"
 

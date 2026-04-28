@@ -63,13 +63,16 @@ def deploy():
         return f'Build failed (code={code}):\n{err}'
     logger.info('Build succeeded. Deploying...')
 
-    env_vars = (
-        f'SPANNER_PROJECT_ID={os.environ["SPANNER_PROJECT_ID"]},'
-        f'SPANNER_INSTANCE_ID={os.environ["SPANNER_INSTANCE_ID"]},'
-        f'SPANNER_DATABASE_ID={os.environ.get("SPANNER_DATABASE_ID", "grocerguard")},'
-        f'GCS_BUCKET_NAME={os.environ.get("GCS_BUCKET_NAME", "")},'
-        f'APP_BASE_URL={os.environ.get("APP_BASE_URL", "")}'
-    )
+    # Use --update-env-vars so we ONLY touch the vars we know about and preserve
+    # anything already on the service (e.g. GCS_BUCKET_NAME originally set at
+    # service creation, env vars added by other tooling, etc).
+    env_pairs = []
+    for var in ('SPANNER_PROJECT_ID', 'SPANNER_INSTANCE_ID', 'SPANNER_DATABASE_ID',
+                'GCS_BUCKET_NAME', 'APP_BASE_URL'):
+        v = os.environ.get(var, '')
+        if v:
+            env_pairs.append(f'{var}={v}')
+    update_env = ','.join(env_pairs)
 
     code, out, err = _run([
         'gcloud', 'run', 'deploy', SERVICE,
@@ -77,8 +80,8 @@ def deploy():
         '--region', REGION,
         '--platform', 'managed',
         '--allow-unauthenticated',
-        '--set-env-vars', env_vars,
-        '--set-secrets', 'SECRET_KEY=grocerguard-secret-key:latest',
+        '--update-env-vars', update_env,
+        '--update-secrets', 'SECRET_KEY=grocerguard-secret-key:latest',
         '--project', PROJECT,
     ], timeout=360)
 

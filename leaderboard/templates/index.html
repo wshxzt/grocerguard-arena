@@ -120,6 +120,17 @@
     .stat-link { color: inherit; text-decoration: none; }
     .stat-link:hover { text-decoration: underline; text-decoration-style: dotted; }
 
+    .card-footer {
+      margin-top: 1rem; padding-top: .75rem; border-top: 1px solid #21262d;
+      display: flex; gap: 1rem; flex-wrap: wrap;
+    }
+    .card-footer a {
+      font-size: .78rem; text-decoration: none;
+      color: #8b949e; transition: color .15s;
+    }
+    .team-card.red  .card-footer a:hover { color: #f85149; }
+    .team-card.blue .card-footer a:hover { color: #58a6ff; }
+
     @media (max-width: 640px) {
       .teams { grid-template-columns: 1fr; }
       header { padding: .75rem 1rem; }
@@ -132,11 +143,7 @@
 <header>
   <div class="logo"><span>&#9888;</span> GrocerGuard Arena</div>
   <nav>
-    <a href="/defenses">Defenses</a>
-    <a href="/blue-runs">Blue Runs</a>
-    <a href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">App</a>
-    <a href="https://red-team-agent-929315648024.us-central1.run.app" target="_blank">Red Team</a>
-    <a href="https://blue-team-agent-929315648024.us-central1.run.app" target="_blank">Blue Team</a>
+    <a href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">App &#8599;</a>
   </nav>
 </header>
 
@@ -166,15 +173,15 @@
       </div>
       <div class="team-stats" style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid #21262d;">
         <div class="team-stat">
-          <div class="val"><a class="stat-link" href="/deploys">{{ stats.deploy_total }}</a></div>
+          <div class="val"><a class="stat-link" href="/deploys?team=red">{{ stats.deploy_total }}</a></div>
           <div class="lbl">Deploy Attempts</div>
         </div>
         <div class="team-stat">
-          <div class="val"><a class="stat-link" href="/deploys">{{ stats.deploy_success }}</a></div>
+          <div class="val"><a class="stat-link" href="/deploys?team=red">{{ stats.deploy_success }}</a></div>
           <div class="lbl">Deploy Success</div>
         </div>
         <div class="team-stat">
-          <div class="val"><a class="stat-link" href="/deploys">{{ stats.deploy_total - stats.deploy_success }}</a></div>
+          <div class="val"><a class="stat-link" href="/deploys?team=red">{{ stats.deploy_total - stats.deploy_success }}</a></div>
           <div class="lbl">Deploy Failed</div>
         </div>
       </div>
@@ -192,6 +199,10 @@
           <div class="lbl">In Progress</div>
         </div>
       </div>
+      <div class="card-footer">
+        <a href="/agent-runs?team=red">Run History &rarr;</a>
+        <a href="https://red-team-agent-929315648024.us-central1.run.app" target="_blank">Console &#8599;</a>
+      </div>
     </div>
 
     <div class="team-card blue">
@@ -200,12 +211,26 @@
       <div class="team-sublabel"><a class="stat-link" href="/defenses">confirmed fixes</a></div>
       <div class="team-stats">
         <div class="team-stat">
-          <div class="val"><a class="stat-link" href="/defenses">{{ blue_stats.total }}</a></div>
+          <div class="val"><a class="stat-link" href="#fix-history">{{ blue_stats.total }}</a></div>
           <div class="lbl">Defenses Run</div>
         </div>
         <div class="team-stat">
-          <div class="val"><a class="stat-link" href="/blue-runs">{{ blue_stats.fixed }}</a></div>
+          <div class="val"><a class="stat-link" href="#fix-history">{{ blue_stats.fixed }}</a></div>
           <div class="lbl">Patches Applied</div>
+        </div>
+      </div>
+      <div class="team-stats" style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid #21262d;">
+        <div class="team-stat">
+          <div class="val"><a class="stat-link" href="/deploys?team=blue">{{ blue_stats.deploy_total }}</a></div>
+          <div class="lbl">Deploy Attempts</div>
+        </div>
+        <div class="team-stat">
+          <div class="val"><a class="stat-link" href="/deploys?team=blue">{{ blue_stats.deploy_success }}</a></div>
+          <div class="lbl">Deploy Success</div>
+        </div>
+        <div class="team-stat">
+          <div class="val"><a class="stat-link" href="/deploys?team=blue">{{ blue_stats.deploy_total - blue_stats.deploy_success }}</a></div>
+          <div class="lbl">Deploy Failed</div>
         </div>
       </div>
       <div class="team-stats" style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid #21262d;">
@@ -221,6 +246,10 @@
           </div>
           <div class="lbl">In Progress</div>
         </div>
+      </div>
+      <div class="card-footer">
+        <a href="/agent-runs?team=blue">Run History &rarr;</a>
+        <a href="https://blue-team-agent-929315648024.us-central1.run.app" target="_blank">Console &#8599;</a>
       </div>
     </div>
 
@@ -247,7 +276,6 @@
             <th>Status</th>
             <th>Payload</th>
             <th>Evidence</th>
-            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -275,9 +303,6 @@
             <td class="evidence" title="{{ a.evidence }}">
               {{ a.evidence[:160] }}{% if a.evidence|length > 160 %}&hellip;{% endif %}
             </td>
-            <td style="white-space:nowrap;">
-              <a href="/attacks/{{ a.id }}" style="color:#58a6ff; font-size:.75rem; text-decoration:none;">Details →</a>
-            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -285,6 +310,64 @@
     </div>
     {% else %}
     <div class="empty">No attacks logged yet — the red team agent hasn't run.</div>
+    {% endif %}
+  </div>
+
+  <!-- Blue Team Fix History -->
+  <p class="section-title" style="margin-top:2rem;" id="fix-history">Blue Team Fix History</p>
+  <div class="table-card">
+    <div class="table-header">
+      <span class="title">All Defenses</span>
+      <span class="count">{{ defenses | length }} entries</span>
+    </div>
+
+    {% if defenses %}
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Time (PST)</th>
+            <th>CWE</th>
+            <th>Vulnerability</th>
+            <th>Rank</th>
+            <th>Status</th>
+            <th>Target URL</th>
+            <th>Evidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in defenses %}
+          <tr>
+            <td class="ts">{{ d.attempted_at | pst }}</td>
+            <td>
+              {% if d.cwe_id %}
+                <a class="cwe-chip"
+                   href="https://cwe.mitre.org/data/definitions/{{ d.cwe_id | replace('CWE-','') }}.html"
+                   target="_blank">{{ d.cwe_id }}</a>
+              {% else %}
+                <span style="color:#484f58;">—</span>
+              {% endif %}
+            </td>
+            <td style="max-width:200px;">{{ d.cwe_name }}</td>
+            <td class="rank">{% if d.cwe_rank %}#{{ d.cwe_rank }}{% else %}—{% endif %}</td>
+            <td>
+              {% if d.fixed %}
+                <span class="badge" style="background:#1a4a1f;color:#3fb950;">fixed</span>
+              {% else %}
+                <span class="badge" style="background:#3d2f00;color:#d29922;">not fixed</span>
+              {% endif %}
+            </td>
+            <td class="payload" title="{{ d.target_url }}">{{ d.target_url }}</td>
+            <td class="evidence" title="{{ d.evidence }}">
+              {{ d.evidence[:160] }}{% if d.evidence|length > 160 %}&hellip;{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">No defenses logged yet — the blue team agent hasn't run.</div>
     {% endif %}
   </div>
 

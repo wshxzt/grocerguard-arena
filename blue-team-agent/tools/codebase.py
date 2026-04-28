@@ -42,8 +42,10 @@ def write_file(path, content):
 
 def search_code(pattern, directory=None):
     base = directory or CODEBASE_DIR
+    # -F: fixed string (no regex). Substring match — the LLM rarely wants regex
+    # and over-escapes special chars when it does, breaking the search.
     result = subprocess.run(
-        ['grep', '-rn', '--include=*.py', '--include=*.html', pattern, base],
+        ['grep', '-rnF', '--include=*.py', '--include=*.html', pattern, base],
         capture_output=True, text=True
     )
     output = result.stdout.strip()
