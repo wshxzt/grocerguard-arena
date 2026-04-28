@@ -45,34 +45,45 @@ _run_reply_events: dict[str, threading.Event] = {}
 _run_stop_events: dict[str, threading.Event] = {}
 
 
+_ACTIVE_STATES = ('queued', 'setting_up', 'running', 'waiting')
+
+
 def _stop_run(run_id: str = '') -> dict:
-    """Signal a run to stop. If run_id is empty, stop the most recent running/queued run."""
-    target_id = run_id
+    """Signal run(s) to stop.
+    - If run_id is given: stop that run.
+    - If run_id is empty: stop ALL currently active runs.
+    """
     with _runs_lock:
-        if not target_id:
-            for rid, run in reversed(list(_runs.items())):
-                if run.get('status') in ('queued', 'setting_up', 'running', 'waiting'):
-                    target_id = rid
-                    break
-        if not target_id:
-            return {'error': 'no active run to stop'}
-        run = _runs.get(target_id)
-        if not run:
-            return {'error': f'run {target_id} not found'}
-        ev = _run_stop_events.get(target_id)
-    if ev is None:
-        return {'error': f'run {target_id} cannot be stopped (already finished?)'}
-    ev.set()
-    # Also unblock any pending ask_user wait so the agent can exit cleanly.
-    reply_ev = _run_reply_events.get(target_id)
-    if reply_ev is not None:
-        with _runs_lock:
-            _runs[target_id]['pending_reply'] = ''
-            _runs[target_id]['pending_question'] = None
-        reply_ev.set()
-    logger.info(f'Run {target_id} stop requested')
-    return {'run_id': target_id, 'status': 'stop requested',
-            'note': 'stop will take effect after the current Claude turn finishes (≤60s).'}
+        if run_id:
+            target_ids = [run_id] if run_id in _runs else []
+        else:
+            target_ids = [rid for rid, run in _runs.items()
+                          if run.get('status') in _ACTIVE_STATES]
+    if not target_ids:
+        return {'error': 'no active run to stop' if not run_id else f'run {run_id} not found'}
+
+    stopped, skipped = [], []
+    for rid in target_ids:
+        ev = _run_stop_events.get(rid)
+        if ev is None:
+            skipped.append(rid)
+            continue
+        ev.set()
+        # Unblock any pending ask_user wait so the agent can exit cleanly.
+        reply_ev = _run_reply_events.get(rid)
+        if reply_ev is not None:
+            with _runs_lock:
+                _runs[rid]['pending_reply'] = ''
+                _runs[rid]['pending_question'] = None
+            reply_ev.set()
+        stopped.append(rid)
+        logger.info(f'Run {rid} stop requested')
+
+    return {
+        'stopped': stopped,
+        'skipped': skipped,
+        'note': 'stop will take effect after each in-flight Claude turn finishes (≤60s).',
+    }
 
 
 def _keepalive_loop():
@@ -106,7 +117,7 @@ You have three tools:
 - get_status: check the status of recent runs
 
 When the user asks to start / run / launch an attack, use start_attack.
-When the user asks to stop / cancel / kill / abort, use stop_attack. If they don't specify which run, omit run_id and the server stops the most recent active one.
+When the user asks to stop / cancel / kill / abort, use stop_attack. If they don't specify which run, omit run_id and the server stops ALL active runs.
 When the user asks about status, results, or what is happening, use get_status.
 For anything else, answer directly.
 
@@ -134,11 +145,11 @@ _CHAT_TOOLS = [
     },
     {
         'name': 'stop_attack',
-        'description': 'Stop a currently running attack run. Use when the user asks to stop, cancel, kill, or abort.',
+        'description': 'Stop currently running attack run(s). Use when the user asks to stop, cancel, kill, or abort.',
         'input_schema': {
             'type': 'object',
             'properties': {
-                'run_id': {'type': 'string', 'description': 'OPTIONAL run ID. Omit to stop the most recent active run.'},
+                'run_id': {'type': 'string', 'description': 'OPTIONAL run ID. Omit to stop ALL currently active runs (the common case).'},
             },
             'required': [],
         },
