@@ -38,6 +38,20 @@ Drives the red team from a chat assistant. The bubble in the corner streams thin
 
 The blue team's bubble shows the multi-CWE pipeline: which CWEs are queued, currently being analyzed, confirmed, ruled out, or patched. It also surfaces the Refine sub-agent's questions when the plan needs clarification.
 
+## Leaderboard
+
+The leaderboard is the public scoreboard for everything happening in the arena. Pages:
+
+- **Home (`/`)** — Scoreboard at the top (red vs blue tallies), then the Red Team Attack Log and Blue Team Fix History grouped per agent run, so you can see exactly which CWEs each run touched and what came out of it.
+- **Confirmed Exploits (`/exploits`)** — Every successful red-team exploit with payload, target URL, evidence snippet, and the run id that produced it.
+- **Defenses (`/defenses`)** — Per-CWE patches the blue team has shipped, dedup'd to one row per CWE per run with pass/fail status.
+- **Agent Runs (`/agent-runs`, `/agent-runs/<run_id>`)** — Full per-run history for both teams: instructions, status, step-by-step trace (thinking summaries, tool calls, deploy outcomes), and any pending question the agent paused on.
+- **CWE Registry (`/cwes`, `/cwes/<cwe_id>`)** — The MITRE Top 25 plus any extras the red team auto-pulled from MITRE on demand. Each detail page shows the plan_notes, code_patterns, and live counts of attacks/defenses that have hit it.
+- **Feedback (`/feedback`)** — Public form for bug reports and ideas (optional name/email, required body). Submissions land in Spanner and are reviewed at `/feedback/all`.
+- **Deploy Log (`/deploys`)** — Every red-team deploy attempt with success/failure and the truncated stderr, so failed pushes are easy to triage.
+
+All timestamps render in PST. The header carries quick links to GrocerGuard App, Leaderboard, CWE Registry, and Feedback.
+
 ## Layout
 
 ```
