@@ -15,9 +15,11 @@ The four services run side-by-side on Cloud Run, share a single Spanner database
 
 ## How a round plays out
 
-1. **Red team** (via chat box or scheduled run) picks a CWE — say CWE-352 / CSRF.
+Both agents are human-triggered from their respective consoles — there's no scheduler or auto-wakeup.
+
+1. **Red team** is launched from the Red Team Console (chat box or "Run an attack" button) for a chosen CWE — say CWE-352 / CSRF.
 2. The agent reads the live `grocerguard` codebase, edits a route to remove CSRF protection, redeploys, then sends an HTTP request that proves the exploit works. Result is logged.
-3. **Blue team** wakes up, syncs the deployed source, and walks through every applicable CWE plan. For each one it does a code search, a 4-case decision-matrix analysis, and a forensic log scan. Any CWE it confirms gets patched and redeployed.
+3. **Blue team** is launched from the Blue Team Console. It syncs the deployed source and walks through every applicable CWE plan. For each one it does a code search, a 4-case decision-matrix analysis, and a forensic log scan. Any CWE it confirms gets patched and redeployed.
 4. Both teams' findings stream onto the leaderboard.
 
 The two services preserve each other's changes by syncing from the live container image (via `crane`) before each run, so the red team builds on top of the blue team's most recent patches and vice versa — instead of constantly reverting each other off a stale git checkout.
