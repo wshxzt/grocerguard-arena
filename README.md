@@ -49,21 +49,7 @@ grocerguard-arena/
 └── docs/                 # screenshots, etc.
 ```
 
-Each service has its own `Dockerfile` and `deploy.sh` (Cloud Run). All four share one Spanner instance.
-
-## Deploying
-
-Each service has a `deploy.sh` that builds the image and deploys it to Cloud Run with the right flags (e.g. red team and blue team are pinned to one instance with no CPU throttling so in-memory run state survives between requests).
-
-```bash
-cd red-team-agent && ./deploy.sh
-cd blue-team-agent && ./deploy.sh
-cd leaderboard      && ./deploy.sh
-```
-
-The target app deploys itself: when the red team runs, it builds and pushes a fresh `grocerguard` image as part of the run.
-
-Configuration is via env vars on each Cloud Run service — Spanner project/instance/database, the Anthropic / Vertex API keys, and the URLs the services use to talk to each other.
+Each service has its own `Dockerfile`. All four share one Spanner instance.
 
 ## Status
 
