@@ -3,6 +3,7 @@ import os
 import json
 import logging
 import random
+import re
 import subprocess
 import threading
 import time
@@ -126,6 +127,8 @@ Rules of thumb:
 
 For start_attack: only set cwe_id if the user explicitly named a CWE (by ID like "CWE-352" or by name like "CSRF", "SQL injection"). For generic asks like "run an attack" or "start a scan", omit cwe_id entirely — the server will pick the next applicable CWE.
 
+CRITICAL: Call start_attack AT MOST ONCE per user message. Never queue extra runs the user didn't ask for. If the user names one CWE, you launch exactly one run for that CWE — do not also launch related CWEs, "while we're at it" runs, or duplicates. If the user wants a batch they will say so.
+
 Be concise. No markdown headers."""
 
 _CHAT_TOOLS = [
@@ -140,7 +143,7 @@ _CHAT_TOOLS = [
                     'enum': ['inject', 'attack', 'both'],
                     'description': 'inject=code change + deploy only, attack=attack existing vuln, both=full pipeline',
                 },
-                'cwe_id':      {'type': 'string', 'description': 'OPTIONAL. Only set this if the user explicitly named a specific CWE (like "CWE-352" or "CSRF"). For generic requests like "run an attack" or "start a scan", LEAVE THIS BLANK so the server picks the next applicable CWE in priority order — never default to a specific CWE on your own.'},
+                'cwe_id':      {'type': 'string', 'description': 'OPTIONAL. Only set this if the user explicitly named a specific CWE (like "CWE-352" or "CSRF"). For generic requests like "run an attack" or "start a scan", LEAVE THIS BLANK so the server picks the next applicable CWE in priority order — never default to a specific CWE on your own. Any valid CWE id works, even ones outside the Top-25 — if the registry doesn\'t have it, the server fetches its name from MITRE and adds it.'},
                 'instructions':{'type': 'string', 'description': 'Specific guidance for the agent.'},
             },
             'required': ['mode'],
@@ -184,8 +187,16 @@ _CHAT_TOOLS = [
 ]
 
 
-def _call_tool(name, inputs):
+def _call_tool(name, inputs, ctx=None):
     if name == 'start_attack':
+        # Guard against the model queuing extra runs in a single chat turn.
+        # The user's intent is one CWE per request unless they explicitly batch.
+        if ctx is not None and ctx.get('start_attack_count', 0) >= 1:
+            return {'error': 'A run was already launched in this turn — only one start_attack '
+                             'per user message is allowed. If the user wanted more, ask them to '
+                             'send another message.'}
+        if ctx is not None:
+            ctx['start_attack_count'] = ctx.get('start_attack_count', 0) + 1
         # Call ourselves internally
         import db, cwe_pipeline
         try:
@@ -193,10 +204,30 @@ def _call_tool(name, inputs):
         except Exception as e:
             logger.warning(f'CWE sync: {e}')
         cwe_id_override = inputs.get('cwe_id', '').strip()
+        added_note = ''
         if cwe_id_override:
-            cwe = db.get_cwe(cwe_id_override)
+            # Normalize "352" or "cwe-352" → "CWE-352"
+            normalized = cwe_id_override.upper()
+            if normalized.isdigit():
+                normalized = f'CWE-{normalized}'
+            elif not normalized.startswith('CWE-'):
+                m = re.match(r'^CWE-?(\d+)$', normalized)
+                normalized = f'CWE-{m.group(1)}' if m else normalized
+            cwe = db.get_cwe(normalized)
             if not cwe:
-                return {'error': f'{cwe_id_override} not in registry'}
+                # Not in our registry — try fetching from MITRE and adding it
+                # so the user can target any valid CWE, not just the Top-25.
+                meta = cwe_pipeline.fetch_cwe_from_mitre(normalized)
+                if not meta:
+                    return {'error': f'{normalized} is not in the registry and no matching CWE page found on MITRE'}
+                # rank=999 / score=0 are placeholder values for non-Top-25 CWEs.
+                db.upsert_cwe(meta['cwe_id'], meta['name'],
+                              rank=999, score=0.0, rank_delta=0, applicable=False)
+                cwe = db.get_cwe(meta['cwe_id'])
+                if not cwe:
+                    return {'error': f'failed to add {normalized} to registry'}
+                added_note = f'Added new CWE to registry: {meta["cwe_id"]} — {meta["name"]}. '
+                logger.info(f'Auto-added new CWE: {meta["cwe_id"]} ({meta["name"]})')
         else:
             cwe = db.get_next_cwe()
             if not cwe:
@@ -219,8 +250,11 @@ def _call_tool(name, inputs):
             args=(run_id, cwe['cwe_id'], cwe['name'], cwe['score'], mode, instructions),
             daemon=True,
         ).start()
-        return {'run_id': run_id, 'cwe_id': cwe['cwe_id'], 'cwe_name': cwe['name'],
-                'mode': mode, 'status': 'queued'}
+        result = {'run_id': run_id, 'cwe_id': cwe['cwe_id'], 'cwe_name': cwe['name'],
+                  'mode': mode, 'status': 'queued'}
+        if added_note:
+            result['note'] = added_note.strip()
+        return result
 
     if name == 'stop_attack':
         return _stop_run(inputs.get('run_id', '').strip())
@@ -414,6 +448,7 @@ def chat():
         return jsonify({'error': 'empty message'}), 400
 
     messages = history + [{'role': 'user', 'content': user_msg}]
+    chat_ctx: dict = {}
 
     while True:
         response = _anthropic.messages.create(
@@ -459,7 +494,7 @@ def chat():
         for block in response.content:
             if block.type != 'tool_use':
                 continue
-            result = _call_tool(block.name, block.input)
+            result = _call_tool(block.name, block.input, ctx=chat_ctx)
             tool_results.append({
                 'type': 'tool_result',
                 'tool_use_id': block.id,

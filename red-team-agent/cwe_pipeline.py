@@ -1,5 +1,9 @@
-"""Fetch the MITRE CWE Top 25 (2025) and sync to Spanner."""
+"""Fetch the MITRE CWE Top 25 (2025) and sync to Spanner.
+
+Also exposes fetch_cwe_from_mitre(cwe_id) to look up any CWE by id, used
+when the user asks to attack a CWE that isn't in the Top-25 registry yet."""
 import logging
+import re
 import requests
 from bs4 import BeautifulSoup
 import db
@@ -71,3 +75,45 @@ def sync_cwes():
 
     logger.info(f'Synced {synced} CWEs ({len(APPLICABLE)} applicable to web apps)')
     return synced
+
+
+def fetch_cwe_from_mitre(cwe_id):
+    """Look up a single CWE on MITRE (https://cwe.mitre.org/data/definitions/<n>.html)
+    and return {cwe_id, name, summary} or None if the page doesn't exist / can't
+    be parsed. Used to auto-add CWEs the user requests that aren't in the Top-25
+    registry already."""
+    m = re.match(r'^CWE-(\d+)$', cwe_id.strip(), flags=re.I)
+    if not m:
+        logger.warning(f'fetch_cwe_from_mitre: bad id {cwe_id!r}')
+        return None
+    num = m.group(1)
+    url = f'https://cwe.mitre.org/data/definitions/{num}.html'
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            logger.warning(f'fetch_cwe_from_mitre({cwe_id}): HTTP {r.status_code}')
+            return None
+        soup = BeautifulSoup(r.text, 'html.parser')
+    except Exception as e:
+        logger.warning(f'fetch_cwe_from_mitre({cwe_id}): {e}')
+        return None
+
+    # Title shape on a real CWE page: "CWE - CWE-352: Cross-Site Request Forgery (CSRF) (4.x)"
+    # On a missing page MITRE returns a generic landing page whose title doesn't
+    # contain "CWE-<num>:".
+    title = soup.title.get_text() if soup.title else ''
+    name_match = re.search(rf'CWE-{num}:\s*(.+?)\s*\(\d', title)
+    if not name_match:
+        logger.warning(f'fetch_cwe_from_mitre({cwe_id}): page does not look like a CWE detail page')
+        return None
+    name = name_match.group(1).strip()[:200]
+
+    summary = ''
+    for h in soup.find_all(['h2', 'h3']):
+        if 'description' in h.get_text(strip=True).lower():
+            p = h.find_next('div')
+            if p:
+                summary = p.get_text(' ', strip=True)[:600]
+            break
+
+    return {'cwe_id': f'CWE-{num}', 'name': name, 'summary': summary}

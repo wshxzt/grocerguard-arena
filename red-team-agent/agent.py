@@ -3,7 +3,7 @@ import logging
 import anthropic
 import db
 from tools.codebase import list_files, read_file, write_file, search_code
-from tools.deploy import deploy
+from tools.deploy import deploy, _get_service_url
 from tools.http_client import http_request
 
 logger = logging.getLogger(__name__)
@@ -232,12 +232,20 @@ def run_agent(cwe_id, cwe_name, cwe_score, mode='both', instructions='', on_prog
     mode = mode if mode in _MODE_INSTRUCTIONS else 'both'
     system = _SYSTEM_BASE + '\n' + _MODE_INSTRUCTIONS[mode]
 
+    try:
+        target_url = _get_service_url()
+    except Exception as e:
+        logger.warning(f'Could not resolve target service URL: {e}')
+        target_url = ''
+
     user_message = (
         f'Target vulnerability:\n'
         f'  CWE ID:   {cwe_id}\n'
         f'  Name:     {cwe_name}\n'
         f'  Score:    {cwe_score}\n'
     )
+    if target_url:
+        user_message += f'  Service:  {target_url}\n'
     if instructions:
         user_message += f'\nAdditional instructions:\n{instructions}'
 

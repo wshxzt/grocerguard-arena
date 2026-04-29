@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feedback Submissions — GrocerGuard Arena</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+
+    header { background: #161b22; border-bottom: 1px solid #30363d; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+    header .logo { font-size: 1.1rem; font-weight: 700; }
+    header .logo span { color: #f85149; }
+    header .app-link { color: #8b949e; text-decoration: none; font-size: .85rem; transition: color .15s; margin-left: 1rem; }
+    header .app-link:hover { color: #e6edf3; }
+    header nav { margin-left: auto; display: flex; gap: 1.5rem; }
+    header nav a { color: #8b949e; text-decoration: none; font-size: .85rem; transition: color .15s; }
+    header nav a:hover { color: #e6edf3; }
+
+    .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
+    .section-title { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: #8b949e; margin-bottom: 1rem; }
+
+    .item {
+      background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+      padding: 1rem 1.25rem; margin-bottom: .85rem;
+    }
+    .item-meta { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-bottom: .65rem; font-size: .78rem; color: #8b949e; }
+    .item-meta strong { color: #e6edf3; font-weight: 600; }
+    .ts { color: #58a6ff; font-variant-numeric: tabular-nums; }
+    .email { color: #c9d1d9; font-family: monospace; }
+    .anon  { color: #484f58; font-style: italic; }
+    .body  { font-size: .9rem; line-height: 1.55; color: #c9d1d9; white-space: pre-wrap; word-break: break-word; }
+    .empty { text-align: center; padding: 4rem 1rem; color: #484f58; font-size: .875rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>&#9888;</span> GrocerGuard Arena</div>
+  <a class="app-link" href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">GrocerGuard App &#8599;</a>
+  <nav>
+    <a href="/">Leaderboard</a>
+    <a href="/cwes">CWE Registry</a>
+    <a href="/feedback">Feedback</a>
+  </nav>
+</header>
+
+<div class="container">
+  <p class="section-title">Feedback Submissions ({{ items | length }})</p>
+
+  {% if items %}
+    {% for it in items %}
+    <div class="item">
+      <div class="item-meta">
+        <span class="ts">{{ it.submitted_at | pst }} PST</span>
+        {% if it.name %}<strong>{{ it.name }}</strong>{% else %}<span class="anon">(no name)</span>{% endif %}
+        {% if it.email %}<a class="email" href="mailto:{{ it.email }}">{{ it.email }}</a>{% else %}<span class="anon">(no email)</span>{% endif %}
+      </div>
+      <div class="body">{{ it.body }}</div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty">No feedback yet.</div>
+  {% endif %}
+</div>
+
+</body>
+</html>

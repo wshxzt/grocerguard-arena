@@ -4,7 +4,8 @@ import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import requests as http
-from flask import Flask, render_template, abort
+import uuid
+from flask import Flask, render_template, abort, request, redirect, url_for
 from google.cloud import spanner
 
 logger = logging.getLogger(__name__)
@@ -511,6 +512,41 @@ def fetch_cwe_detail(cwe_id):
     }
 
 
+def save_feedback(name, email, body):
+    """Insert one feedback row. name/email may be empty strings → stored as NULL."""
+    fid = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    with get_db().batch() as batch:
+        batch.insert(
+            table='feedback',
+            columns=['id', 'name', 'email', 'body', 'submitted_at'],
+            values=[(fid, (name or None), (email or None), body, now)],
+        )
+    return fid
+
+
+def fetch_feedback(limit=200):
+    rows = []
+    with get_db().snapshot() as snap:
+        for r in snap.execute_sql(
+            'SELECT id, name, email, body, submitted_at '
+            'FROM feedback ORDER BY submitted_at DESC LIMIT @lim',
+            params={'lim': limit},
+            param_types={'lim': spanner.param_types.INT64},
+        ):
+            ts = r[4]
+            if ts and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            rows.append({
+                'id': r[0],
+                'name': r[1] or '',
+                'email': r[2] or '',
+                'body': r[3],
+                'submitted_at': ts,
+            })
+    return rows
+
+
 def fetch_deploys(team=None):
     """Fetch deploys. team='blue' filters to blue team only; 'red' excludes blue team."""
     results = []
@@ -605,6 +641,26 @@ def cwe_detail(cwe_id):
     if not cwe:
         abort(404)
     return render_template('cwe_detail.html', cwe=cwe)
+
+
+@app.route('/feedback', methods=['GET', 'POST'])
+def feedback_page():
+    if request.method == 'POST':
+        name  = (request.form.get('name')  or '').strip()[:200]
+        email = (request.form.get('email') or '').strip()[:320]
+        body  = (request.form.get('body')  or '').strip()
+        if not body:
+            return render_template('feedback.html',
+                                   error='Please enter your feedback before submitting.',
+                                   name=name, email=email, body=body)
+        save_feedback(name, email, body)
+        return render_template('feedback.html', submitted=True)
+    return render_template('feedback.html')
+
+
+@app.route('/feedback/all')
+def feedback_list_page():
+    return render_template('feedback_list.html', items=fetch_feedback())
 
 
 @app.route('/deploys')
