@@ -22,11 +22,11 @@ IMAGES = {
     'Whole Wheat Bread':      f'{BUCKET}/products/whole_wheat_bread.jpg',
     'Croissants':             f'{BUCKET}/products/croissants.jpg',
     'Chicken Breast':         f'{BUCKET}/products/chicken_breast.jpg',
-    'Atlantic Salmon':        'https://loremflickr.com/400/300/salmon,fish?lock=15',   # TODO: replace
+    'Atlantic Salmon':        f'{BUCKET}/products/atlantic_salmon.jpg',
     'Lean Ground Beef':       f'{BUCKET}/products/lean_ground_beef.jpg',
-    'Pasta Rigatoni':         'https://loremflickr.com/400/300/pasta?lock=17',          # TODO: replace
+    'Pasta Rigatoni':         f'{BUCKET}/products/pasta_rigatoni.jpg',
     'Olive Oil Extra Virgin': f'{BUCKET}/products/olive_oil.jpg',
-    'Canned Black Beans':     'https://loremflickr.com/400/300/beans?lock=19',          # TODO: replace
+    'Canned Black Beans':     f'{BUCKET}/products/canned_black_beans.jpg',
     'Jasmine Rice':           f'{BUCKET}/products/jasmine_rice.jpg',
 }
 
