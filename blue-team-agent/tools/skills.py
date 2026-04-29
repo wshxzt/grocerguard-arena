@@ -1,8 +1,6 @@
 import os
 import subprocess
 import shutil
-import glob
-import re
 import logging
 
 logger = logging.getLogger(__name__)
@@ -155,77 +153,3 @@ def inspect_deployed_filesystem(service_name: str) -> str:
         logger.warning(f'inspect_deployed_filesystem: error: {e}')
         return f"Error: {e}"
 
-def scan_top_cwes(directory: str) -> str:
-    """Run localized heuristic scans on the codebase for Top CWEs (SQLi, XSS, OS Command Injection)."""
-    logger.info(f'scan_top_cwes: directory={directory}')
-    if not directory:
-        directory = "."
-
-    results = []
-
-    # 1. CWE-89: SQL Injection — covers many shapes (Spanner execute_sql, SQLAlchemy
-    # text(), raw .execute(), and f-strings/concat/format/% containing SQL keywords).
-    sqli_patterns = [
-        # .execute / .execute_sql / .execute_update with unsafe formatting
-        re.compile(r'\.execute(_sql|_update)?\s*\(\s*f["\']'),
-        re.compile(r'\.execute(_sql|_update)?\s*\([^)]*\.format\s*\('),
-        re.compile(r'\.execute(_sql|_update)?\s*\([^)]*%\s*[\(\w]'),
-        re.compile(r'\.execute(_sql|_update)?\s*\([^)]*\+\s*\w'),
-        # SQLAlchemy text() with unsafe formatting
-        re.compile(r'\btext\s*\(\s*f["\']'),
-        re.compile(r'\btext\s*\([^)]*\.format\s*\('),
-        re.compile(r'\btext\s*\([^)]*\+\s*\w'),
-        re.compile(r'\btext\s*\([^)]*%\s*[\(\w]'),
-        # f-string or concat/format directly assembling a SQL keyword string
-        re.compile(r'f["\'][^"\']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\b', re.IGNORECASE),
-        re.compile(r'["\'][^"\']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\b[^"\']*["\']\s*[%+]', re.IGNORECASE),
-        re.compile(r'["\'][^"\']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\b[^"\']*["\']\s*\.\s*format\s*\(', re.IGNORECASE),
-    ]
-
-    # 2. CWE-79: XSS — Jinja `|safe`, autoescape off, or Markup() with user input.
-    xss_patterns = [
-        re.compile(r'\{\{[^}]*\|\s*safe\s*\}\}'),
-        re.compile(r'\{%\s*autoescape\s+false\s*%\}', re.IGNORECASE),
-        re.compile(r'\bMarkup\s*\([^)]*[\+%f]'),
-    ]
-
-    # 3. CWE-78: OS Command Injection — os.system, shell=True, popen.
-    cmd_inj_patterns = [
-        re.compile(r'os\.system\s*\('),
-        re.compile(r'subprocess\.(Popen|run|call|check_output)\s*\([^)]*shell\s*=\s*True'),
-        re.compile(r'os\.popen\s*\('),
-    ]
-
-    for root, _, files in os.walk(directory):
-        if '/venv' in root or '/.git' in root or '__pycache__' in root:
-            continue
-        for file in files:
-            if not file.endswith(('.py', '.html')):
-                continue
-
-            filepath = os.path.join(root, file)
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    content = f.read()
-
-                if file.endswith('.py'):
-                    for i, line in enumerate(content.splitlines()):
-                        if any(p.search(line) for p in sqli_patterns):
-                            results.append(f"Potential CWE-89 (SQLi) at {filepath}:{i+1} -> {line.strip()[:200]}")
-                        if any(p.search(line) for p in cmd_inj_patterns):
-                            results.append(f"Potential CWE-78 (OS Cmd Inj) at {filepath}:{i+1} -> {line.strip()[:200]}")
-
-                elif file.endswith('.html'):
-                    for i, line in enumerate(content.splitlines()):
-                        if any(p.search(line) for p in xss_patterns):
-                            results.append(f"Potential CWE-79 (XSS) at {filepath}:{i+1} -> {line.strip()[:200]}")
-            except Exception:
-                pass
-
-    if not results:
-        logger.info('scan_top_cwes: no findings')
-        return "No obvious Top CWEs found via heuristic scan."
-    logger.info(f'scan_top_cwes: {len(results)} finding(s)')
-    for r in results:
-        logger.info(f'  CWE finding: {r}')
-    return "Heuristic Scan Results:\n" + "\n".join(results)

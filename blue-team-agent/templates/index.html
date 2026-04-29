@@ -34,7 +34,7 @@
       font-size: .7rem; font-weight: 700; flex-shrink: 0;
     }
     .user      .avatar { background: #58a6ff; color: #0d1117; }
-    .assistant .avatar { background: #1f6feb; color: #fff; }
+    .assistant .avatar { background: linear-gradient(135deg, #4285f4 0%, #8b5cf6 100%); color: #fff; padding: 0; overflow: hidden; }
     .bubble {
       padding: .65rem 1rem; border-radius: 14px;
       font-size: .875rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
@@ -109,7 +109,7 @@
 
 <div id="messages">
   <div class="msg assistant">
-    <div class="avatar">BT</div>
+    <div class="avatar"><svg viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg" style="width:18px;height:18px;fill:#fff"><path d="M96 8C47.6 8 8 47.6 8 96s39.6 88 88 88 88-39.6 88-88S144.4 8 96 8zm0 36c5.5 0 10.6 2.5 14 6.8L96 96 82 50.8A18 18 0 0 1 96 44zm0 104c-5.5 0-10.6-2.5-14-6.8L96 96l14 45.2A18 18 0 0 1 96 148zm52-52c0 5.5-2.5 10.6-6.8 14L96 96l45.2-14A18 18 0 0 1 148 96zM50.8 110A18 18 0 0 1 44 96c0-5.5 2.5-10.6 6.8-14L96 96 50.8 110z"/></svg></div>
     <div class="bubble">Hi! I'm the GrocerGuard blue team agent. I can scan the codebase, patch vulnerabilities, and verify my fixes.
 
 What would you like to do?</div>
@@ -140,7 +140,8 @@ const esc = t => t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;
 function addMsg(role, text, extra='') {
   const d = document.createElement('div');
   d.className = `msg ${role} ${extra}`;
-  d.innerHTML = `<div class="avatar">${role==='user'?'You':'BT'}</div><div class="bubble">${esc(text)}</div>`;
+  const avatarContent = role === 'user' ? 'You' : `<svg viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg" style="width:18px;height:18px;fill:#fff"><path d="M96 8C47.6 8 8 47.6 8 96s39.6 88 88 88 88-39.6 88-88S144.4 8 96 8zm0 36c5.5 0 10.6 2.5 14 6.8L96 96 82 50.8A18 18 0 0 1 96 44zm0 104c-5.5 0-10.6-2.5-14-6.8L96 96l14 45.2A18 18 0 0 1 96 148zm52-52c0 5.5-2.5 10.6-6.8 14L96 96l45.2-14A18 18 0 0 1 148 96zM50.8 110A18 18 0 0 1 44 96c0-5.5 2.5-10.6 6.8-14L96 96 50.8 110z"/></svg>`;
+  d.innerHTML = `<div class="avatar">${avatarContent}</div><div class="bubble">${esc(text)}</div>`;
   msgsEl.appendChild(d);
   msgsEl.scrollTop = msgsEl.scrollHeight;
   return d;

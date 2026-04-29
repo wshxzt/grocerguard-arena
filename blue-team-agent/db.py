@@ -22,26 +22,43 @@ def get_db():
 
 
 def get_cwe_plans():
-    """Read CWE plans from cwe_registry, sorted by rank ascending. Each plan
-    has cwe_id, name, rank, suspect_paths, code_patterns, log_patterns, plan_notes."""
+    """Read CWE candidates from cwe_registry sorted by rank ascending. Returns ALL
+    web-relevant CWEs (applicable=TRUE OR already has any plan field set), so
+    the analyze phase can both deeply scan planned CWEs AND opportunistically
+    propose plans for unplanned ones it has confidence in.
+
+    Each entry has: cwe_id, name, rank, suspect_paths, code_patterns,
+    log_patterns, plan_notes, is_planned. is_planned is True iff at least one
+    of the plan fields is populated."""
     with get_db().snapshot() as snap:
         rows = list(snap.execute_sql("""
             SELECT cwe_id, name, rank, suspect_paths, code_patterns, log_patterns, plan_notes
             FROM cwe_registry
-            WHERE suspect_paths IS NOT NULL
-               OR code_patterns IS NOT NULL
-               OR log_patterns IS NOT NULL
+            WHERE applicable = TRUE
+               OR ARRAY_LENGTH(suspect_paths) > 0
+               OR ARRAY_LENGTH(code_patterns) > 0
+               OR ARRAY_LENGTH(log_patterns)  > 0
+               OR plan_notes IS NOT NULL
             ORDER BY rank ASC
         """))
-    return [{
-        'cwe_id':        r[0],
-        'name':          r[1],
-        'rank':          r[2],
-        'suspect_paths': list(r[3] or []),
-        'code_patterns': list(r[4] or []),
-        'log_patterns':  list(r[5] or []),
-        'plan_notes':    r[6] or '',
-    } for r in rows]
+    out = []
+    for r in rows:
+        suspect_paths = list(r[3] or [])
+        code_patterns = list(r[4] or [])
+        log_patterns  = list(r[5] or [])
+        plan_notes    = r[6] or ''
+        is_planned = bool(suspect_paths or code_patterns or log_patterns or plan_notes)
+        out.append({
+            'cwe_id':        r[0],
+            'name':          r[1],
+            'rank':          r[2],
+            'suspect_paths': suspect_paths,
+            'code_patterns': code_patterns,
+            'log_patterns':  log_patterns,
+            'plan_notes':    plan_notes,
+            'is_planned':    is_planned,
+        })
+    return out
 
 
 def update_cwe_plan_notes(cwe_id, addition):

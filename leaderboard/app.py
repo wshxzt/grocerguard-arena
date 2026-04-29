@@ -421,6 +421,96 @@ def fetch_defense_groups():
     return out
 
 
+def fetch_cwe_registry():
+    """Return every row in cwe_registry with plan field counts and live
+    attack/defense counts. Used by /cwes."""
+    out = []
+    sql = """
+      SELECT
+        c.cwe_id, c.name, c.rank, c.score, c.applicable,
+        c.suspect_paths, c.code_patterns, c.log_patterns, c.plan_notes,
+        (SELECT COUNT(*) FROM attack_log a WHERE a.cwe_id = c.cwe_id) AS attempts,
+        (SELECT COUNT(*) FROM attack_log a
+          WHERE a.cwe_id = c.cwe_id AND a.status = 'confirmed') AS confirmed,
+        (SELECT COUNT(*)
+           FROM defense_log d
+           JOIN attack_log  a ON a.id = d.attack_id
+           WHERE a.cwe_id = c.cwe_id AND d.fixed = TRUE) AS fixes
+      FROM cwe_registry c
+      ORDER BY c.rank ASC
+    """
+    with get_db().snapshot() as snap:
+        for r in snap.execute_sql(sql):
+            suspect_paths = list(r[5] or [])
+            code_patterns = list(r[6] or [])
+            log_patterns  = list(r[7] or [])
+            plan_notes    = r[8] or ''
+            is_planned    = bool(suspect_paths or code_patterns or log_patterns or plan_notes)
+            out.append({
+                'cwe_id':              r[0],
+                'name':                r[1],
+                'rank':                r[2],
+                'score':                float(r[3]),
+                'applicable':          r[4],
+                'suspect_paths':       suspect_paths,
+                'code_patterns':       code_patterns,
+                'log_patterns':        log_patterns,
+                'plan_notes':          plan_notes,
+                'is_planned':          is_planned,
+                'attempts':            r[9],
+                'confirmed_exploits':  r[10],
+                'fixes':               r[11],
+            })
+    return out
+
+
+def fetch_cwe_detail(cwe_id):
+    """Single CWE registry row for the detail page."""
+    sql = """
+      SELECT
+        c.cwe_id, c.name, c.rank, c.score, c.applicable,
+        c.suspect_paths, c.code_patterns, c.log_patterns, c.plan_notes,
+        (SELECT COUNT(*) FROM attack_log a WHERE a.cwe_id = c.cwe_id) AS attempts,
+        (SELECT COUNT(*) FROM attack_log a
+          WHERE a.cwe_id = c.cwe_id AND a.status = 'confirmed') AS confirmed,
+        (SELECT COUNT(*)
+           FROM defense_log d
+           JOIN attack_log  a ON a.id = d.attack_id
+           WHERE a.cwe_id = c.cwe_id AND d.fixed = TRUE) AS fixes
+      FROM cwe_registry c
+      WHERE c.cwe_id = @cwe_id
+    """
+    with get_db().snapshot() as snap:
+        rows = list(snap.execute_sql(
+            sql,
+            params={'cwe_id': cwe_id},
+            param_types={'cwe_id': spanner.param_types.STRING},
+        ))
+    if not rows:
+        return None
+    r = rows[0]
+    suspect_paths = list(r[5] or [])
+    code_patterns = list(r[6] or [])
+    log_patterns  = list(r[7] or [])
+    plan_notes    = r[8] or ''
+    is_planned    = bool(suspect_paths or code_patterns or log_patterns or plan_notes)
+    return {
+        'cwe_id':             r[0],
+        'name':               r[1],
+        'rank':               r[2],
+        'score':               float(r[3]),
+        'applicable':         r[4],
+        'suspect_paths':      suspect_paths,
+        'code_patterns':      code_patterns,
+        'log_patterns':       log_patterns,
+        'plan_notes':         plan_notes,
+        'is_planned':         is_planned,
+        'attempts':           r[9],
+        'confirmed_exploits': r[10],
+        'fixes':              r[11],
+    }
+
+
 def fetch_deploys(team=None):
     """Fetch deploys. team='blue' filters to blue team only; 'red' excludes blue team."""
     results = []
@@ -502,6 +592,19 @@ def agent_run_detail(run_id):
 @app.route('/defenses')
 def defenses_page():
     return render_template('defenses.html', defenses=fetch_defenses())
+
+
+@app.route('/cwes')
+def cwes_page():
+    return render_template('cwes.html', cwes=fetch_cwe_registry())
+
+
+@app.route('/cwes/<cwe_id>')
+def cwe_detail(cwe_id):
+    cwe = fetch_cwe_detail(cwe_id)
+    if not cwe:
+        abort(404)
+    return render_template('cwe_detail.html', cwe=cwe)
 
 
 @app.route('/deploys')

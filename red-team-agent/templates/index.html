@@ -263,8 +263,8 @@ function startPolling(runId, info) {
     : runId.slice(0, 8) + '…';
   const bubble = addStatusBubble('');
   const bubbleEl = bubble.querySelector('.bubble');
-  const icons = { queued: '⏳', setting_up: '⚙️', running: '🔴', done: '✅', error: '❌', stopped: '⏹️' };
-  const TERMINAL = new Set(['done', 'error', 'stopped']);
+  const icons = { queued: '⏳', setting_up: '⚙️', running: '🔴', done: '✅', error: '❌', stopped: '⏹️', lost: '⚠️' };
+  const TERMINAL = new Set(['done', 'error', 'stopped', 'lost']);
   const startedAt = Date.now();
   let lastPolled = null;
   let cached = { status: 'queued', steps: [], detail: '' };
@@ -312,11 +312,28 @@ function startPolling(runId, info) {
   // Clock: re-render every second for live elapsed time + "synced Xs ago"
   const clockTimer = setInterval(render, 1000);
 
-  // Poll server every 3 seconds for status + step updates
+  // Poll server every 3 seconds. Track consecutive 404s — if the agent
+  // container restarted (e.g. a redeploy), the run is gone from in-memory
+  // state and the bubble would otherwise loop forever on stale data.
+  let missCount = 0;
   const pollTimer = setInterval(async () => {
     try {
       const res = await fetch(`/runs/${runId}`);
+      if (res.status === 404) {
+        missCount++;
+        if (missCount >= 3) {
+          cached = Object.assign({}, cached, {
+            status: 'lost',
+            detail: 'Run state lost — the agent container likely restarted mid-run (e.g. a redeploy). Check the leaderboard Run History for the persisted record.',
+          });
+          render();
+          clearInterval(pollTimer);
+          clearInterval(clockTimer);
+        }
+        return;
+      }
       if (!res.ok) return;
+      missCount = 0;
       cached = await res.json();
       lastPolled = Date.now();
       render();

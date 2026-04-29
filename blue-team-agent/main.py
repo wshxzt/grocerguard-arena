@@ -270,6 +270,16 @@ def _execute_run(run_id, instructions=''):
                 if c not in seen:
                     seen.add(c)
                     ordered.append(c)
+            # Filter to only CWEs that actually have a plan in the registry.
+            # Unplanned CWEs are opportunistic plan-seeding targets — the bubble
+            # checklist focuses on the deterministic, planned ones.
+            try:
+                import db as _db
+                planned_set = {p['cwe_id'] for p in _db.get_cwe_plans()
+                               if p.get('is_planned')}
+                ordered = [c for c in ordered if c in planned_set]
+            except Exception as e:
+                logger.warning(f'planned_cwes filter failed, falling back to all: {e}')
             with _runs_lock:
                 _runs[run_id]['planned_cwes'] = ordered
         elif key == 'diagnosis' and isinstance(value, str):

@@ -116,7 +116,6 @@ from tools.http_client import http_request as _http_request
 from tools.skills import (
     fetch_service_logs as _fetch_service_logs,
     inspect_deployed_filesystem as _inspect_deployed_filesystem,
-    scan_top_cwes as _scan_top_cwes,
     search_service_logs as _search_service_logs,
 )
 
@@ -138,10 +137,6 @@ def fetch_service_logs(service_name: str, limit: int = 50) -> str:
 def search_service_logs(service_name: str, query: str, limit: int = 30) -> str:
     """Search Cloud Run service logs for a substring match. Use for CWE-specific forensics — e.g. 'UNION SELECT' for SQLi, '<script' for XSS, '; rm ' for command injection, '../' for path traversal, '%27' for URL-encoded quote."""
     return _search_service_logs(service_name, query, limit)
-
-def scan_top_cwes(directory: str) -> str:
-    """Run heuristic CWE pattern scans (SQLi, XSS, CMDi) on Python and HTML files in a directory."""
-    return _scan_top_cwes(directory)
 
 def list_files(directory: str = "") -> str:
     """List all source files in a directory. Pass empty string for the full codebase."""
@@ -243,9 +238,13 @@ You are the Analyze phase. The Gather phase produced this PLAN of candidate CWEs
 
 The deployed codebase is at /tmp/inspections/grocerguard/app/.
 
-Walk through EVERY candidate in the plan, in the order given (priority order). For EACH candidate, run the 4-step protocol below and decide whether it's confirmed. Collect ALL confirmed vulnerabilities — do NOT stop at the first one. The patch phase will fix all of them in a single pass.
+Walk through EVERY candidate in the plan, in the order given (priority order). For EACH candidate, decide whether it's confirmed. Collect ALL confirmed vulnerabilities — do NOT stop at the first one. The patch phase will fix all in a single pass.
 
-PER-CANDIDATE PROTOCOL — do these in order:
+Each candidate has a boolean `is_planned`:
+- is_planned=True  → the registry has code_patterns / plan_notes for this CWE. Run the FULL PLANNED PROTOCOL below (Steps 0-5).
+- is_planned=False → the registry knows this CWE exists but has NO plan yet. Run the SHORTER UNPLANNED PROTOCOL further down. The point is to opportunistically seed plans for new CWEs, not to do exhaustive coverage.
+
+═══════ PLANNED PROTOCOL (is_planned=True) ═══════
 
 STEP 0 — mark this candidate as in-progress so the operator sees live status:
    call mark_cwe_status(cwe_id=<this candidate's id>, status='analyzing')
@@ -272,21 +271,61 @@ STEP 2 — classify findings. There are TWO independent paths to a confirmation;
 
    A single candidate may produce findings via Path A, Path B, or both. Each finding is one entry in the consolidated list.
 
-STEP 3 — forensic correlation (optional):
-   Run the candidate's `log_patterns` via search_service_logs("grocerguard", <pattern>) to look for past attack evidence. Strengthens but is not required.
+STEP 3 — log forensics (REQUIRED):
+   For EACH string in the candidate's `log_patterns` list, call:
+     search_service_logs("grocerguard", <that pattern>)
+   Record any hits.
 
-STEP 4 — decide for this candidate:
-   For each finding produced by Path A or Path B in Step 2:
-     EXPLOITABLE = user input can reach the sink (HTTP route → flow → sink).
-     If exploitable, add it to the confirmed list (one entry per finding).
-   If neither path produced any finding for this candidate, it's a false positive — record it briefly and move to the next candidate.
+   In addition to literal pattern matches, you (Gemini) may independently judge a log entry as attack evidence when its shape clearly indicates an attempt at this CWE — even if no `log_patterns` entry matched. Examples: an unusually structured query parameter, a request body containing JS-event handlers, a path with deeply-nested traversal, a POST without a CSRF token from an off-origin Referer, etc. If you see such an entry, treat it as attack evidence the same way as a literal match. (This complements Path B for code: the plan's log_patterns are the deterministic baseline; agent-judged log evidence catches the cases the plan didn't anticipate, and feeds PLAN_REFINEMENT.)
+
+   Either source — literal `log_patterns` hit OR Gemini-judged attack-shaped log entry — counts as "log evidence" for Step 4. Log evidence is significant: it means an attacker has actually exploited (or attempted to exploit) this CWE against the live service. Do not skip this step even if Step 2 already produced a finding.
+
+STEP 4 — decide for this candidate. Combine code findings (Step 2) with log evidence (Step 3):
+
+   Case A — Step 2 found a vulnerability AND Step 3 has matching attack evidence:
+     Strongest signal. CONFIRMED — add to list.
+
+   Case B — Step 2 found a vulnerability but Step 3 has no log evidence:
+     Real bug, not yet exploited. CONFIRMED — add to list.
+
+   Case C — Step 3 has log evidence but Step 2 found NOTHING (or only matches that look benign per plan_notes):
+     A real attack landed but the plan's code_patterns didn't surface it. This is almost certainly an UNPLANNED VULN that the registry's plan needs to learn about. Do NOT give up — re-investigate via Path B:
+       * Re-read the suspect files in the candidate's `suspect_paths` (and any related route handlers) looking for vulnerable code shapes the plan didn't anticipate (different ORM helper, a Markup() in a utility module, a sink the plan_notes doesn't mention, etc.).
+       * If you spot a real exploitable bug: CONFIRM as agent-discovered AND emit a PLAN_REFINEMENT block seeding the missing code_patterns / plan_notes so future scans catch it deterministically.
+       * If after re-reading you genuinely cannot find a code-level bug: still report the log evidence as a finding, with `evidence: "log evidence of past attack at <url/timestamp> but no current vulnerable code found — recommend manual trace"`. Mark Classification as `agent-discovered` and emit a PLAN_REFINEMENT proposing log_patterns refinements + a plan_notes line that flags this as an investigation gap. Don't fabricate a fix target.
+
+   Case D — neither Step 2 nor Step 3 has anything:
+     False positive. Skip.
+
+   For any case where you confirm, also require EXPLOITABLE = user input reaches the sink (HTTP route → flow → sink). If the code matches but is unreachable, drop the finding.
 
 STEP 5 — mark final status for this candidate:
    - If at least one finding was confirmed: call mark_cwe_status(cwe_id=<id>, status='confirmed')
    - If false positive / ruled out: call mark_cwe_status(cwe_id=<id>, status='ruled_out', note='<one-line reason>')
-   Then move to the next candidate's Step 0.
+   Then move to the next candidate.
 
-After you've gone through every candidate in the plan, output the consolidated diagnosis in the format below.
+═══════ UNPLANNED PROTOCOL (is_planned=False) ═══════
+
+For CWEs without an existing plan, the goal is OPPORTUNISTIC plan-seeding, not full coverage. Spend at most 2-3 tool calls per unplanned CWE.
+
+STEP 0u — mark in-progress:
+   call mark_cwe_status(cwe_id=<id>, status='analyzing')
+
+STEP 1u — quick targeted look:
+   Use the CWE name (and your own knowledge of how it manifests in a Flask + Spanner web app like GrocerGuard) to pick AT MOST 1-2 files most likely to contain the bug shape, then read them. Examples of quick-look heuristics (use your own judgment, these are not exhaustive):
+     - CWE-352 (CSRF): grep route handlers with @<bp>.route(..., methods=['POST'|'PUT'|'DELETE']) for missing CSRFProtect / csrf_token usage.
+     - CWE-862 (Missing Authorization): scan admin/* routes for missing @login_required / role checks.
+     - CWE-200 (Sensitive Info Exposure): scan responses/templates for password_hash, api_key, secret leaking back to user.
+     - CWE-639 (IDOR): scan routes that take an id from request.args/form and look up DB rows without owner-check.
+   Do NOT do an exhaustive file-by-file scan; one or two reads is the budget.
+
+STEP 2u — decide:
+   - If you spot a clearly exploitable bug AND can articulate a concrete fix: mark CONFIRMED (treat as agent-discovered) AND emit a PLAN_REFINEMENT block in the diagnosis seeding INITIAL code_patterns + plan_notes for this CWE so future scans can detect it deterministically. Then call mark_cwe_status(cwe_id, status='confirmed').
+   - Otherwise: call mark_cwe_status(cwe_id=<id>, status='ruled_out', note='unplanned, no obvious vuln spotted in quick read'). Move on.
+
+═══════ AFTER ALL CANDIDATES ═══════
+
+Output the consolidated diagnosis in the format below.
 
 OUTPUT FORMAT:
 

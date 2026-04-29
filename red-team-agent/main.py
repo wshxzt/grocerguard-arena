@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 _PST = ZoneInfo('America/Los_Angeles')
@@ -111,15 +111,18 @@ threading.Thread(target=_keepalive_loop, daemon=True).start()
 _CHAT_SYSTEM = """You are the GrocerGuard Red Team assistant, running at the red-team-agent service.
 You help users manage automated security attacks against the GrocerGuard target application.
 
-You have three tools:
+You have four tools:
 - start_attack: trigger a red team run (inject a vulnerability, attack it, or both)
 - stop_attack: stop a currently running attack (use when the user asks to stop / cancel / kill / abort)
 - get_status: check the status of recent runs
+- list_cwes: read the CWE registry — returns CWEs with rank/score and whether they've been attacked yet. USE THIS for any informational/listing/exploration question about CWEs.
 
-When the user asks to start / run / launch an attack, use start_attack.
-When the user asks to stop / cancel / kill / abort, use stop_attack. If they don't specify which run, omit run_id and the server stops ALL active runs.
-When the user asks about status, results, or what is happening, use get_status.
-For anything else, answer directly.
+Rules of thumb:
+- "Run/start/launch an attack" → start_attack.
+- "Stop/cancel/kill/abort" → stop_attack (omit run_id to stop ALL active runs).
+- "What's the status / what's happening / what did we run" → get_status.
+- "What CWEs are available / popular / untried / haven't been tried / left to try / what's the top X" → list_cwes. NEVER call start_attack to answer an informational question. Only call start_attack when the user clearly wants action.
+- Anything else → answer directly.
 
 For start_attack: only set cwe_id if the user explicitly named a CWE (by ID like "CWE-352" or by name like "CSRF", "SQL injection"). For generic asks like "run an attack" or "start a scan", omit cwe_id entirely — the server will pick the next applicable CWE.
 
@@ -161,6 +164,19 @@ _CHAT_TOOLS = [
             'type': 'object',
             'properties': {
                 'run_id': {'type': 'string', 'description': 'Optional run ID; omit for all recent runs.'},
+            },
+            'required': [],
+        },
+    },
+    {
+        'name': 'list_cwes',
+        'description': 'List CWEs in the registry, with rank, score, applicability, and whether they have been attacked. Use for ANY informational/listing question about CWEs (popular, untried, top-N, what is left, etc.). DO NOT use for triggering a run.',
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'filter':  {'type': 'string', 'enum': ['all', 'untried', 'attempted', 'applicable'],
+                            'description': 'all=every CWE; untried=not in attack_log; attempted=in attack_log; applicable=applicable=TRUE only. Default: applicable.'},
+                'limit':   {'type': 'integer', 'description': 'Max rows. Default 25.'},
             },
             'required': [],
         },
@@ -215,6 +231,40 @@ def _call_tool(name, inputs):
             if run_id:
                 return _runs.get(run_id, {'error': 'run not found'})
             return list(reversed(list(_runs.values())))[-10:]  # last 10
+
+    if name == 'list_cwes':
+        import db as _db
+        from google.cloud import spanner as _sp
+        f = (inputs.get('filter') or 'applicable').strip().lower()
+        limit = int(inputs.get('limit') or 25)
+        sql = (
+            "SELECT c.cwe_id, c.name, c.rank, c.score, c.applicable, "
+            "       (SELECT COUNT(*) FROM attack_log a WHERE a.cwe_id = c.cwe_id) AS attempts, "
+            "       (SELECT COUNT(*) FROM attack_log a WHERE a.cwe_id = c.cwe_id AND a.status = 'confirmed') AS confirmed "
+            "FROM cwe_registry c "
+        )
+        if f == 'untried':
+            sql += "WHERE c.cwe_id NOT IN (SELECT DISTINCT cwe_id FROM attack_log) "
+        elif f == 'attempted':
+            sql += "WHERE c.cwe_id IN (SELECT DISTINCT cwe_id FROM attack_log) "
+        elif f == 'applicable':
+            sql += "WHERE c.applicable = TRUE "
+        # 'all' → no extra filter
+        sql += "ORDER BY c.rank ASC LIMIT @lim"
+        try:
+            with _db.get_db().snapshot() as snap:
+                rows = list(snap.execute_sql(
+                    sql,
+                    params={'lim': limit},
+                    param_types={'lim': _sp.param_types.INT64},
+                ))
+        except Exception as e:
+            return {'error': f'list_cwes failed: {e}'}
+        return [
+            {'cwe_id': r[0], 'name': r[1], 'rank': r[2], 'score': float(r[3]),
+             'applicable': r[4], 'attempts': r[5], 'confirmed_exploits': r[6]}
+            for r in rows
+        ]
 
     return {'error': f'unknown tool: {name}'}
 
@@ -282,6 +332,15 @@ def _execute_run(run_id, cwe_id, cwe_name, cwe_score, mode, instructions, jitter
                 time.sleep(delay)
         update('setting_up')
         setup_workspace()
+        # Sync deployed grocerguard source into CODEBASE_DIR so this run builds
+        # on top of whatever's live (including blue team's most recent fixes),
+        # rather than reverting them by rebuilding from a stale git checkout.
+        try:
+            from tools.inspect import inspect_and_sync_deployed
+            sync_msg = inspect_and_sync_deployed('grocerguard')
+            logger.info(f'Run {run_id} {sync_msg}')
+        except Exception as e:
+            logger.warning(f'Run {run_id} inspect_and_sync failed (continuing with git checkout): {e}')
         update('running', f'{cwe_id} / mode={mode}')
         from agent import run_agent
         run_agent(cwe_id, cwe_name, cwe_score, mode=mode, instructions=instructions,

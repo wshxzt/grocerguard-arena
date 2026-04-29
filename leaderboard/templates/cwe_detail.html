@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ cwe.cwe_id }} — GrocerGuard Arena</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+
+    header { background: #161b22; border-bottom: 1px solid #30363d; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+    header .logo { font-size: 1.1rem; font-weight: 700; }
+    header .logo span { color: #f85149; }
+    header .app-link { color: #8b949e; text-decoration: none; font-size: .85rem; transition: color .15s; margin-left: 1rem; }
+    header .app-link:hover { color: #e6edf3; }
+    header nav { margin-left: auto; display: flex; gap: 1.5rem; }
+    header nav a { color: #8b949e; text-decoration: none; font-size: .85rem; transition: color .15s; }
+    header nav a:hover { color: #e6edf3; }
+
+    .container { max-width: 1000px; margin: 0 auto; padding: 2rem 1.5rem; }
+    .back { color: #58a6ff; font-size: .8rem; text-decoration: none; display: inline-block; margin-bottom: 1rem; }
+    .back:hover { text-decoration: underline; }
+
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; margin-bottom: 1.25rem; overflow: hidden; }
+    .card-header { padding: 1rem 1.25rem; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+    .cwe-chip { display: inline-block; font-family: monospace; font-size: .9rem; background: #21262d; color: #58a6ff; padding: 4px 10px; border-radius: 4px; text-decoration: none; }
+    .cwe-name { font-weight: 600; font-size: 1rem; color: #e6edf3; }
+    .meta { margin-left: auto; display: flex; gap: 1rem; font-size: .75rem; color: #8b949e; align-items: center; }
+    .meta strong { color: #e6edf3; }
+
+    .badge { display: inline-block; font-size: .7rem; font-weight: 600; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+    .badge-yes      { background: #1a4a1f; color: #3fb950; }
+    .badge-no       { background: #21262d; color: #8b949e; }
+    .badge-planned  { background: #1a2f4a; color: #58a6ff; }
+    .badge-unplanned{ background: #3d2f00; color: #d29922; }
+
+    .card-body { padding: 1.25rem; }
+    .field { margin-bottom: 1.25rem; }
+    .field:last-child { margin-bottom: 0; }
+    .field-label { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #8b949e; margin-bottom: .4rem; }
+    .field-value { font-size: .85rem; line-height: 1.6; color: #c9d1d9; word-break: break-word; }
+    .notes-block, .pattern-list {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: .75rem 1rem; font-size: .82rem; line-height: 1.55;
+      color: #c9d1d9; white-space: pre-wrap; word-break: break-word;
+    }
+    .pattern-list { font-family: monospace; }
+    .pattern-list ul { margin: 0; padding-left: 1.25rem; }
+    .pattern-list li { margin: 0; padding: 1px 0; color: #c9d1d9; }
+    .empty-block { color: #484f58; font-size: .8rem; font-style: italic; }
+
+    .stats-row { display: flex; gap: 1.25rem; padding: .9rem 1.25rem; border-bottom: 1px solid #21262d; flex-wrap: wrap; }
+    .stat { font-size: .78rem; color: #8b949e; }
+    .stat strong { font-size: 1.1rem; font-weight: 700; color: #e6edf3; display: block; line-height: 1; margin-bottom: .15rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>&#9888;</span> GrocerGuard Arena</div>
+  <a class="app-link" href="https://grocerguard-hfzinwetfq-uc.a.run.app" target="_blank">GrocerGuard App &#8599;</a>
+  <nav>
+    <a href="/">Leaderboard</a>
+    <a href="/cwes" style="color:#e6edf3;">CWE Registry</a>
+  </nav>
+</header>
+
+<div class="container">
+  <a class="back" href="/cwes">&larr; Back to CWE Registry</a>
+
+  <div class="card">
+    <div class="card-header">
+      <a class="cwe-chip" href="https://cwe.mitre.org/data/definitions/{{ cwe.cwe_id | replace('CWE-','') }}.html" target="_blank" title="MITRE CWE">{{ cwe.cwe_id }}</a>
+      <span class="cwe-name">{{ cwe.name }}</span>
+      {% if cwe.applicable %}
+        <span class="badge badge-yes">applicable</span>
+      {% else %}
+        <span class="badge badge-no">not applicable</span>
+      {% endif %}
+      {% if cwe.is_planned %}
+        <span class="badge badge-planned">planned</span>
+      {% else %}
+        <span class="badge badge-unplanned">no plan</span>
+      {% endif %}
+      <div class="meta">
+        <span>Rank <strong>#{{ cwe.rank }}</strong></span>
+        <span>Score <strong>{{ '%.1f' % cwe.score }}</strong></span>
+      </div>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat"><strong>{{ cwe.attempts }}</strong>Attempts</div>
+      <div class="stat"><strong style="color:{% if cwe.confirmed_exploits %}#f85149{% else %}#e6edf3{% endif %};">{{ cwe.confirmed_exploits }}</strong>Confirmed exploits</div>
+      <div class="stat"><strong style="color:{% if cwe.fixes %}#3fb950{% else %}#e6edf3{% endif %};">{{ cwe.fixes }}</strong>Fixes</div>
+    </div>
+
+    <div class="card-body">
+      <div class="field">
+        <div class="field-label">Plan notes</div>
+        {% if cwe.plan_notes %}
+          <div class="notes-block">{{ cwe.plan_notes }}</div>
+        {% else %}
+          <div class="empty-block">No plan notes for this CWE yet — Refine phase can seed them when an agent-discovered finding fires.</div>
+        {% endif %}
+      </div>
+
+      <div class="field">
+        <div class="field-label">Code patterns ({{ cwe.code_patterns | length }})</div>
+        {% if cwe.code_patterns %}
+          <div class="pattern-list"><ul>{% for p in cwe.code_patterns %}<li>{{ p }}</li>{% endfor %}</ul></div>
+        {% else %}
+          <div class="empty-block">No code patterns. analyze's deterministic Step 1 grep is skipped — agent uses Path B only.</div>
+        {% endif %}
+      </div>
+
+      <div class="field">
+        <div class="field-label">Suspect paths ({{ cwe.suspect_paths | length }})</div>
+        {% if cwe.suspect_paths %}
+          <div class="pattern-list"><ul>{% for p in cwe.suspect_paths %}<li>{{ p }}</li>{% endfor %}</ul></div>
+        {% else %}
+          <div class="empty-block">No suspect paths.</div>
+        {% endif %}
+      </div>
+
+      <div class="field">
+        <div class="field-label">Log patterns ({{ cwe.log_patterns | length }})</div>
+        {% if cwe.log_patterns %}
+          <div class="pattern-list"><ul>{% for p in cwe.log_patterns %}<li>{{ p }}</li>{% endfor %}</ul></div>
+        {% else %}
+          <div class="empty-block">No log patterns.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
