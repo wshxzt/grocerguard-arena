@@ -210,13 +210,23 @@ def mark_cwe_status(cwe_id: str, status: str, note: str = '') -> str:
     cb(cwe_id, status, note)
     return f'marked {cwe_id} as {status}'
 
+_UUID_RE = __import__('re').compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', __import__('re').I)
+
+
 def log_defense(attack_id: str, target_url: str, fixed: bool, evidence: str) -> str:
     """Record a defense outcome to the database. Set attack_id to empty string if unknown.
     The current run_id is attached automatically so multiple defenses from one scan group together."""
     run_id = _run_id_cv.get()
-    db.log_defense(attack_id=attack_id, target_url=target_url, fixed=fixed,
+    # Spanner column is sized for a UUID (36 chars). If the model passed
+    # something else (a description, a CWE id, a free-text label), drop it
+    # rather than blowing up the whole pipeline.
+    aid = (attack_id or '').strip()
+    if aid and not _UUID_RE.match(aid):
+        logger.warning(f'log_defense: discarding non-UUID attack_id={aid[:60]!r}')
+        aid = ''
+    db.log_defense(attack_id=aid, target_url=target_url, fixed=fixed,
                    evidence=evidence, run_id=run_id)
-    return f"Defense logged for attack_id={attack_id} (run_id={run_id})"
+    return f"Defense logged for attack_id={aid or '(none)'} (run_id={run_id})"
 
 
 # ── Agent instructions ─────────────────────────────────────────────────────────
@@ -292,7 +302,7 @@ STEP 4 — decide for this candidate. Combine code findings (Step 2) with log ev
      A real attack landed but the plan's code_patterns didn't surface it. This is almost certainly an UNPLANNED VULN that the registry's plan needs to learn about. Do NOT give up — re-investigate via Path B:
        * Re-read the suspect files in the candidate's `suspect_paths` (and any related route handlers) looking for vulnerable code shapes the plan didn't anticipate (different ORM helper, a Markup() in a utility module, a sink the plan_notes doesn't mention, etc.).
        * If you spot a real exploitable bug: CONFIRM as agent-discovered AND emit a PLAN_REFINEMENT block seeding the missing code_patterns / plan_notes so future scans catch it deterministically.
-       * If after re-reading you genuinely cannot find a code-level bug: still report the log evidence as a finding, with `evidence: "log evidence of past attack at <url/timestamp> but no current vulnerable code found — recommend manual trace"`. Mark Classification as `agent-discovered` and emit a PLAN_REFINEMENT proposing log_patterns refinements + a plan_notes line that flags this as an investigation gap. Don't fabricate a fix target.
+       * If after re-reading you genuinely cannot find a code-level bug: DO NOT mark this CWE as CONFIRMED. A "confirmed" finding must always include a concrete file/line — otherwise the patch phase has nothing actionable to operate on, and you'd be flagging a vulnerability we can't fix. Instead: call mark_cwe_status(cwe_id, status='ruled_out', note='log evidence of past attack at <url/timestamp> but no current vulnerable code found — investigation gap'), and emit a PLAN_REFINEMENT proposing better code_patterns / log_patterns + a plan_notes line that flags this as an investigation gap. The PLAN_REFINEMENT lets future scans catch it; the ruled_out status keeps the patch phase clean.
 
    Case D — neither Step 2 nor Step 3 has anything:
      False positive. Skip.
@@ -334,13 +344,14 @@ If at least one CWE was confirmed, output:
 CONFIRMED VULNERABILITIES (<count>):
 
 ### 1. <CWE-ID> (<name>)
-File: <path relative to /tmp/inspections/grocerguard/app/>
-Line: <line number>
-Vulnerable code:
-<the actual snippet>
+File: <path relative to /tmp/inspections/grocerguard/app/> — REQUIRED, must be a real file you read this run
+Line: <line number> — REQUIRED
+Vulnerable code: <the actual snippet> — REQUIRED, copied from the file
 Attack evidence: <log line showing the attack URL, or "no past attack in logs but code is clearly vulnerable">
 Exploit description: <how>
 Classification: plan-confirmed | agent-discovered
+
+If you cannot fill in File / Line / Vulnerable code with concrete values, the candidate is NOT confirmed — drop it from this list and mark it ruled_out instead. Never write "No specific file identified" or "Not identified" in a confirmed entry.
 
 ### 2. <CWE-ID> (<name>)
 … same fields …

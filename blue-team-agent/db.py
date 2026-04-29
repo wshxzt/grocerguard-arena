@@ -162,6 +162,44 @@ def log_deploy(success, detail=''):
         )
 
 
+def fetch_agent_run(run_id):
+    """Look up a persisted agent_runs row by id. Used as a fallback when the
+    in-memory run dict has been wiped (container restart, redeploy, etc.) so
+    bubble polling can still see the final status instead of declaring the
+    run 'lost'."""
+    import json
+    with get_db().snapshot() as snap:
+        rows = list(snap.execute_sql(
+            "SELECT id, team, status, instructions, detail, steps_json, started_at, ended_at "
+            "FROM agent_runs WHERE id = @id",
+            params={'id': run_id},
+            param_types={'id': spanner.param_types.STRING},
+        ))
+    if not rows:
+        return None
+    r = rows[0]
+    started, ended = r[6], r[7]
+    if started and started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if ended and ended.tzinfo is None:
+        ended = ended.replace(tzinfo=timezone.utc)
+    try:
+        steps = json.loads(r[5]) if r[5] else []
+    except Exception:
+        steps = []
+    return {
+        'run_id':           r[0],
+        'team':             r[1],
+        'status':           r[2],
+        'instructions':     r[3] or '',
+        'detail':           r[4] or '',
+        'steps':            steps,
+        'pending_question': None,
+        'started_at':       started.isoformat() if started else '',
+        'ended_at':         ended.isoformat() if ended else '',
+    }
+
+
 def save_agent_run(run_id, team, status, instructions, detail, gather_findings, steps, started_at):
     """Persist a completed agent run to agent_runs."""
     import json

@@ -476,9 +476,19 @@ def list_runs():
 def get_run(run_id):
     with _runs_lock:
         run = _runs.get(run_id)
-    if not run:
-        return jsonify({'error': 'run not found'}), 404
-    return jsonify({k: v for k, v in run.items() if not k.startswith('_')})
+    if run:
+        return jsonify({k: v for k, v in run.items() if not k.startswith('_')})
+    # Fall back to the persisted row in agent_runs so a finished run survives
+    # in-memory eviction (redeploy, container restart) instead of looking 'lost'.
+    try:
+        import db
+        persisted = db.fetch_agent_run(run_id)
+    except Exception as e:
+        logger.warning(f'fetch_agent_run({run_id}) failed: {e}')
+        persisted = None
+    if persisted:
+        return jsonify(persisted)
+    return jsonify({'error': 'run not found'}), 404
 
 
 @app.route('/runs/<run_id>/reply', methods=['POST'])

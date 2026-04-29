@@ -5,7 +5,10 @@ RUN apt-get update && apt-get install -y python3-pip git curl && \
 
 # crane — needed to pull the live grocerguard image and sync deployed source into CODEBASE_DIR
 # before each run, so red team builds on top of blue team's latest patches.
-RUN curl -L https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz | tar -xz -C /usr/local/bin crane
+RUN curl -fL --retry 3 --retry-delay 5 -o /tmp/crane.tgz \
+      https://github.com/google/go-containerregistry/releases/download/v0.21.5/go-containerregistry_Linux_x86_64.tar.gz && \
+    tar -xz -C /usr/local/bin -f /tmp/crane.tgz crane && \
+    rm /tmp/crane.tgz
 
 WORKDIR /app
 COPY requirements.txt .
