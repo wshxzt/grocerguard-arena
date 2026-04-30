@@ -10,7 +10,7 @@ The four services run side-by-side on Cloud Run, share a single Spanner database
 |---|---|---|
 | `grocerguard-app/` | Target Flask app — the thing being attacked. Holds the deliberate vulnerabilities. | Flask, Spanner |
 | `red-team-agent/` | Picks a CWE, injects a vulnerability into the target, deploys it, then exploits it over HTTP. | Anthropic Claude (`claude-opus-4-7` for runs, `claude-sonnet-4-6` for the chat assistant) |
-| `blue-team-agent/` | Inspects the deployed target, hunts for vulnerabilities (planned + unplanned), patches them, and redeploys. | Google ADK + Gemini 2.5 Flash |
+| `blue-team-agent/` | Inspects the deployed target, hunts for vulnerabilities (planned + unplanned), patches them, and redeploys. **Self-learning**: when it spots a bug shape the registry's plan didn't cover, it appends notes / new code patterns to the plan so future scans catch it deterministically. | Google ADK + Gemini 2.5 Flash |
 | `leaderboard/` | Public dashboard — agent runs, exploits, defenses, CWE registry, feedback form. | Flask, Spanner |
 
 ## How a round plays out
@@ -20,7 +20,8 @@ Both agents are human-triggered from their respective consoles — there's no sc
 1. **Red team** is launched from the Red Team Console (chat box or "Run an attack" button) for a chosen CWE — say CWE-352 / CSRF.
 2. The agent reads the live `grocerguard` codebase, edits a route to remove CSRF protection, redeploys, then sends an HTTP request that proves the exploit works. Result is logged.
 3. **Blue team** is launched from the Blue Team Console. It syncs the deployed source and walks through every applicable CWE plan. For each one it does a code search, a 4-case decision-matrix analysis, and a forensic log scan. Any CWE it confirms gets patched and redeployed.
-4. Both teams' findings stream onto the leaderboard.
+4. **Plan refinement.** If the blue team confirmed something the existing CWE plan didn't precisely cover (an "agent-discovered" finding, or a log-evidence investigation gap), a Refine sub-agent proposes additions to that CWE's `plan_notes` / `code_patterns`. After human approval in the bubble, the registry is updated — so next run the same bug is caught deterministically by pattern, not just by Gemini's judgment.
+5. Both teams' findings stream onto the leaderboard.
 
 The two services preserve each other's changes by syncing from the live container image (via `crane`) before each run, so the red team builds on top of the blue team's most recent patches and vice versa — instead of constantly reverting each other off a stale git checkout.
 
