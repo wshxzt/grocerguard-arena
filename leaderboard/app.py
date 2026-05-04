@@ -630,6 +630,43 @@ def defenses_page():
     return render_template('defenses.html', defenses=fetch_defenses())
 
 
+def fetch_patches(run_id=None, limit=200):
+    """Patch log entries (one per write_file during a blue run), newest first."""
+    sql = ("SELECT p.id, p.run_id, p.file_path, p.unified_diff, "
+           "       p.bytes_before, p.bytes_after, p.applied_at, "
+           "       r.team, r.status "
+           "FROM patch_log p "
+           "LEFT JOIN agent_runs r ON r.id = p.run_id ")
+    params = {'lim': int(limit)}
+    types = {'lim': spanner.param_types.INT64}
+    if run_id:
+        sql += "WHERE p.run_id = @rid "
+        params['rid'] = run_id
+        types['rid'] = spanner.param_types.STRING
+    sql += "ORDER BY p.applied_at DESC LIMIT @lim"
+    with get_db().snapshot() as snap:
+        rows = list(snap.execute_sql(sql, params=params, param_types=types))
+    return [{
+        'id':           r[0],
+        'run_id':       r[1] or '',
+        'file_path':    r[2] or '',
+        'unified_diff': r[3] or '',
+        'bytes_before': r[4] or 0,
+        'bytes_after':  r[5] or 0,
+        'applied_at':   r[6],
+        'team':         r[7] or '',
+        'run_status':   r[8] or '',
+    } for r in rows]
+
+
+@app.route('/patches')
+def patches_page():
+    run_id = request.args.get('run_id', '').strip() or None
+    return render_template('patches.html',
+                           patches=fetch_patches(run_id=run_id),
+                           run_id=run_id)
+
+
 @app.route('/cwes')
 def cwes_page():
     return render_template('cwes.html', cwes=fetch_cwe_registry())

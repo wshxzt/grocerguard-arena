@@ -64,6 +64,7 @@
   <nav>
     <a href="/">Leaderboard</a>
     <a href="/agent-runs">Run History</a>
+    {% if run.team == 'blue' %}<a href="/patches?run_id={{ run.id }}">Patches</a>{% endif %}
   </nav>
 </header>
 

@@ -151,6 +151,22 @@ def log_defense(attack_id, target_url, fixed, evidence, run_id=None):
         )
 
 
+def log_patch(run_id, file_path, unified_diff, bytes_before, bytes_after):
+    """Record a single write_file (patch) during a blue team run.
+    Stores a unified diff so the leaderboard can show what changed without
+    archiving full file contents. Diff is capped to keep STRING(MAX) sane."""
+    now = datetime.now(timezone.utc)
+    with get_db().batch() as batch:
+        batch.insert(
+            table='patch_log',
+            columns=['id', 'run_id', 'file_path', 'unified_diff',
+                     'bytes_before', 'bytes_after', 'applied_at'],
+            values=[(str(uuid.uuid4()), run_id, file_path[:500],
+                     (unified_diff or '')[:200000],
+                     int(bytes_before), int(bytes_after), now)]
+        )
+
+
 def log_deploy(success, detail=''):
     """Log a blue team deploy."""
     now = datetime.now(timezone.utc)

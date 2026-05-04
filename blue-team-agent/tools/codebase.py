@@ -1,5 +1,6 @@
 """File system tools for reading and modifying the GrocerGuard codebase."""
 import os
+import difflib
 import subprocess
 import logging
 
@@ -58,6 +59,14 @@ def write_file(path, content):
     orig = path
     if not os.path.isabs(path):
         path = os.path.join(CODEBASE_DIR, path)
+
+    before = ''
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            before = f.read()
+    except (FileNotFoundError, UnicodeDecodeError, OSError):
+        before = ''
+
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
@@ -66,6 +75,26 @@ def write_file(path, content):
         logger.warning(f'write_file failed on {path}: {e}')
         return f'(write_file error on {orig}: {e})'
     logger.info(f'write_file: {path} ({len(content)} bytes)')
+
+    # Persist a patch_log entry so the leaderboard can show before/after
+    # diffs per run. Best-effort: a logging failure must not break the run.
+    try:
+        import db
+        from agent import _run_id_cv
+        run_id = _run_id_cv.get()
+        rel = os.path.relpath(path, CODEBASE_DIR) if path.startswith(CODEBASE_DIR) else path
+        diff = ''.join(difflib.unified_diff(
+            before.splitlines(keepends=True),
+            content.splitlines(keepends=True),
+            fromfile=f'a/{rel}',
+            tofile=f'b/{rel}',
+            n=3,
+        ))
+        db.log_patch(run_id=run_id, file_path=rel, unified_diff=diff,
+                     bytes_before=len(before), bytes_after=len(content))
+    except Exception as e:
+        logger.warning(f'log_patch failed (non-fatal): {e}')
+
     return f'Written {len(content)} bytes to {path}'
 
 

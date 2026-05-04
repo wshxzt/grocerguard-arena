@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Patches — GrocerGuard Arena</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+
+    header { background: #161b22; border-bottom: 1px solid #30363d; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+    header .logo { font-size: 1.1rem; font-weight: 700; }
+    header .logo span { color: #58a6ff; }
+    header nav { margin-left: auto; display: flex; gap: 1.5rem; }
+    header nav a { color: #8b949e; text-decoration: none; font-size: .85rem; transition: color .15s; }
+    header nav a:hover { color: #e6edf3; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+    .section-title { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: #8b949e; margin-bottom: 1.25rem; }
+    .filter-note { color: #8b949e; font-size: .8rem; margin-bottom: 1rem; }
+    .filter-note a { color: #58a6ff; text-decoration: none; }
+    .filter-note a:hover { text-decoration: underline; }
+
+    .patch-card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+      border-left: 4px solid #58a6ff;
+      margin-bottom: 1.5rem; overflow: hidden;
+    }
+    .patch-header {
+      padding: .8rem 1.1rem; border-bottom: 1px solid #30363d;
+      display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+    }
+    .file-path { font-family: monospace; font-size: .85rem; color: #e6edf3; word-break: break-all; }
+    .meta { color: #8b949e; font-size: .72rem; margin-left: auto; display: flex; gap: 1rem; align-items: center; }
+    .meta .ts { color: #58a6ff; font-variant-numeric: tabular-nums; }
+    .run-link { font-family: monospace; font-size: .75rem; color: #8b949e; text-decoration: none; background:#21262d; padding: 2px 8px; border-radius: 4px; }
+    .run-link:hover { color: #e6edf3; }
+    .size-delta { font-size: .72rem; color: #8b949e; }
+
+    .diff {
+      padding: 1rem 1.25rem;
+      background: #0d1117;
+      font-family: 'SF Mono', Menlo, Consolas, monospace;
+      font-size: .78rem; line-height: 1.55;
+      white-space: pre; overflow-x: auto;
+      max-height: 480px; overflow-y: auto;
+    }
+    .diff .h { color: #8b949e; }
+    .diff .a { color: #3fb950; background: #0d2f15; display:block; }
+    .diff .d { color: #f85149; background: #4a1a1a; display:block; }
+    .diff .c { color: #58a6ff; }
+
+    .empty { text-align: center; padding: 4rem 1rem; color: #484f58; font-size: .875rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>&#9650;</span> GrocerGuard Arena</div>
+  <nav>
+    <a href="/">Leaderboard</a>
+    <a href="/defenses">Defenses</a>
+    <a href="/cwes">CWE Registry</a>
+    <a href="/feedback">Feedback</a>
+  </nav>
+</header>
+
+<div class="container">
+  <p class="section-title">
+    Blue Team Patches
+    {% if run_id %}— filtered to run <code>{{ run_id[:8] }}</code>{% endif %}
+    &mdash; {{ patches | length }}
+  </p>
+  {% if run_id %}
+  <p class="filter-note"><a href="/patches">← clear filter</a></p>
+  {% endif %}
+
+  {% if patches %}
+    {% for p in patches %}
+    <div class="patch-card">
+      <div class="patch-header">
+        <span class="file-path">{{ p.file_path }}</span>
+        <span class="size-delta">{{ p.bytes_before }} → {{ p.bytes_after }} bytes</span>
+        <div class="meta">
+          {% if p.run_id %}
+          <a class="run-link" href="/agent-runs/{{ p.run_id }}">run {{ p.run_id[:8] }}</a>
+          {% endif %}
+          <span class="ts">{{ p.applied_at | pst }} PST</span>
+        </div>
+      </div>
+      <div class="diff">{% if p.unified_diff %}{% for line in p.unified_diff.splitlines() %}{% if line.startswith('+++') or line.startswith('---') %}<span class="h">{{ line }}</span>
+{% elif line.startswith('@@') %}<span class="c">{{ line }}</span>
+{% elif line.startswith('+') %}<span class="a">{{ line }}</span>{% elif line.startswith('-') %}<span class="d">{{ line }}</span>{% else %}{{ line }}
+{% endif %}{% endfor %}{% else %}(no diff captured — file may have been newly created with empty original){% endif %}</div>
+    </div>
+    {% endfor %}
+  {% else %}
+  <div class="empty">No patches recorded yet.</div>
+  {% endif %}
+</div>
+
+</body>
+</html>
