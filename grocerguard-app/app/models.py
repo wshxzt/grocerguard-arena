@@ -62,6 +62,17 @@ class Product(db.Model):
             return f'https://loremflickr.com/400/300/{keyword}'
         if self.image_path.startswith('http'):
             return self.image_path
+        # Repo-bundled image: paths like 'products/foo.jpg' or 'static/products/foo.jpg'
+        # are served directly by Flask's static handler so a fresh clone has working
+        # images without needing a GCS bucket.
+        if self.image_path.startswith(('products/', 'static/products/', '/static/products/')):
+            from flask import url_for
+            rel = self.image_path
+            for prefix in ('/static/', 'static/'):
+                if rel.startswith(prefix):
+                    rel = rel[len(prefix):]
+                    break
+            return url_for('static', filename=rel)
         if gcs_service and gcs_service.is_configured():
             return gcs_service.get_public_url(self.image_path)
         keyword = self.name.split()[0].lower()
