@@ -16,6 +16,7 @@ os.environ.setdefault('OTEL_SDK_DISABLED', 'true')
 from flask import Flask, request, jsonify, render_template
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from google.cloud import spanner
 
 from google.adk.agents import Agent
 from google.adk import Runner
@@ -126,6 +127,21 @@ You help security engineers troubleshoot, defend, and patch the GrocerGuard appl
 
 When the user asks to start/run/launch a scan, use trigger_scan.
 When the user asks about status or results, use get_status.
+
+PLAN REFINEMENT RECOVERY:
+At the end of each scan, the Refine sub-agent sometimes proposes additions to a CWE's plan_notes or code_patterns. The user approves them via a Yes/No bubble. If they miss that window (the bubble closes, container restarts, etc.), the proposal is preserved in the run's steps_json and can be retrieved later.
+
+Two tools:
+- list_pending_refinements() — lists what's pending. Use only if the user wants to BROWSE proposals first.
+- apply_pending_refinement(cwe_id) — looks up + applies the most recent proposal for ONE CWE atomically. Use this when the user names the CWE.
+
+Routing:
+- "What refinements are pending?" / "what's missing?" → list_pending_refinements, then summarize.
+- "apply CWE-X" / "save CWE-X" / "yes apply that one" with a clear CWE id → apply_pending_refinement(cwe_id="CWE-X"). Do NOT call list_pending_refinements first; do NOT loop.
+- After apply_pending_refinement returns, write a short summary in plain text covering: (a) which CWE was updated, (b) the plan_notes line that was appended (quote it verbatim if non-empty), (c) the code_patterns added (each one on its own line, in backticks). Mention which run_id the proposal came from. Then END YOUR TURN. Do not re-call any tool unless the user asks for something new.
+
+Never apply without an explicit CWE id from the user. If they say "apply it" but only one CWE was previously listed, that's enough — call apply_pending_refinement with that id.
+
 For anything else, answer directly and help them troubleshoot.
 """
 
@@ -159,11 +175,160 @@ def get_status(run_id: str = "") -> str:
         return json.dumps(list(reversed(list(_runs.values())))[-10:])
 
 
+_REFINEMENT_RE = __import__('re').compile(
+    r'PLAN_REFINEMENT:\s*\n'
+    r'\s*cwe_id:\s*(?P<cwe_id>CWE-\d+)\s*\n'
+    r'\s*new_code_patterns:\s*(?P<patterns>.*?)\n'
+    r'\s*new_plan_notes_addition:\s*(?P<notes>.*?)(?=\n\s*reasoning:|\n\s*PLAN_REFINEMENT:|\Z)',
+    __import__('re').DOTALL | __import__('re').IGNORECASE,
+)
+
+
+def _parse_refinements_from_steps(steps):
+    """Find PLAN_REFINEMENT blocks in a run's saved step list. Returns a list
+    of dicts: {cwe_id, code_patterns: [...], plan_notes_addition: '...'}."""
+    import ast
+    out = []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        text = step.get('text', '') or ''
+        if 'PLAN_REFINEMENT:' not in text:
+            continue
+        for m in _REFINEMENT_RE.finditer(text):
+            patterns_raw = m.group('patterns').strip()
+            patterns = []
+            if patterns_raw and patterns_raw not in ('[]', 'null', 'None'):
+                try:
+                    parsed = ast.literal_eval(patterns_raw)
+                    if isinstance(parsed, list):
+                        patterns = [str(p) for p in parsed if p]
+                except Exception:
+                    pass
+            notes = m.group('notes').strip().strip('"').strip("'")
+            out.append({
+                'cwe_id': m.group('cwe_id').upper(),
+                'code_patterns': patterns,
+                'plan_notes_addition': notes,
+            })
+    return out
+
+
+def list_pending_refinements(limit: int = 5) -> str:
+    """Look up recent blue team runs and return PLAN_REFINEMENT proposals that
+    haven't been applied yet. Use this when the user asks to recover a
+    refinement they missed approving in the bubble."""
+    import db
+    sql = ("SELECT id, started_at, steps_json FROM agent_runs "
+           "WHERE team='blue' ORDER BY started_at DESC LIMIT @lim")
+    try:
+        with db.get_db().snapshot() as snap:
+            rows = list(snap.execute_sql(
+                sql, params={'lim': int(limit)},
+                param_types={'lim': spanner.param_types.INT64},
+            ))
+    except Exception as e:
+        return json.dumps({'error': f'list_pending_refinements failed: {e}'})
+
+    # Map cwe_id → current plan_notes/code_patterns once, to filter out
+    # refinements already applied.
+    current = {}
+    try:
+        with db.get_db().snapshot() as snap:
+            for r in snap.execute_sql(
+                'SELECT cwe_id, plan_notes, code_patterns FROM cwe_registry'
+            ):
+                current[r[0]] = {
+                    'plan_notes':    r[1] or '',
+                    'code_patterns': list(r[2] or []),
+                }
+    except Exception as e:
+        logger.warning(f'cwe_registry preload failed: {e}')
+
+    pending = []
+    seen = set()  # (run_id, cwe_id) — dedupe within a single run
+    for run_id, started_at, steps_json in rows:
+        try:
+            steps = json.loads(steps_json) if steps_json else []
+        except Exception:
+            steps = []
+        for ref in _parse_refinements_from_steps(steps):
+            key = (run_id, ref['cwe_id'])
+            if key in seen:
+                continue
+            seen.add(key)
+            cur = current.get(ref['cwe_id'], {'plan_notes': '', 'code_patterns': []})
+            notes_already = (ref['plan_notes_addition']
+                             and ref['plan_notes_addition'] in cur['plan_notes'])
+            patterns_missing = [p for p in ref['code_patterns']
+                                if p not in cur['code_patterns']]
+            if notes_already and not patterns_missing:
+                continue  # already applied
+            pending.append({
+                'source_run_id':         run_id,
+                'started_at':            started_at.isoformat() if started_at else '',
+                'cwe_id':                ref['cwe_id'],
+                'code_patterns':         ref['code_patterns'],
+                'patterns_to_add':       patterns_missing,
+                'plan_notes_addition':   ref['plan_notes_addition'],
+                'notes_already_applied': bool(notes_already),
+            })
+    return json.dumps(pending)
+
+
+def apply_pending_refinement(cwe_id: str) -> str:
+    """Apply the most recent pending PLAN_REFINEMENT for a single CWE to the
+    registry. Looks up the proposal from the saved blue agent_runs (so it
+    works even after the bubble's approval window closed) and writes the
+    additions to cwe_registry.
+
+    Use this after the user explicitly names which CWE to apply, e.g.
+    "apply CWE-306" or "save the CWE-89 refinement". Do NOT call this just
+    because list_pending_refinements returned something — wait for the user."""
+    import db
+    cwe_id = (cwe_id or '').strip().upper()
+    if not cwe_id.startswith('CWE-'):
+        return json.dumps({'error': f'bad cwe_id: {cwe_id!r}'})
+
+    try:
+        pending = json.loads(list_pending_refinements(limit=10))
+    except Exception as e:
+        return json.dumps({'error': f'lookup failed: {e}'})
+    if isinstance(pending, dict) and 'error' in pending:
+        return json.dumps(pending)
+
+    match = next((p for p in pending if p.get('cwe_id') == cwe_id), None)
+    if not match:
+        return json.dumps({'error': f'no pending refinement found for {cwe_id} '
+                                    f'(it may already be applied, or no recent '
+                                    f'run proposed one)'})
+
+    notes = match.get('plan_notes_addition') or ''
+    patterns = match.get('patterns_to_add') or []
+    results = {
+        'cwe_id': cwe_id,
+        'source_run_id': match.get('source_run_id', ''),
+        'plan_notes_added': '',
+        'plan_notes_status': '',
+        'patterns_added': [],
+        'patterns_status': '',
+    }
+    if notes.strip() and not match.get('notes_already_applied'):
+        results['plan_notes_status'] = db.update_cwe_plan_notes(cwe_id, notes)
+        results['plan_notes_added']  = notes
+    if patterns:
+        results['patterns_status'] = db.update_cwe_code_patterns(cwe_id, patterns)
+        results['patterns_added']  = patterns
+    if not results['plan_notes_added'] and not results['patterns_added']:
+        return json.dumps({'error': f'{cwe_id} refinement is already fully applied'})
+    return json.dumps(results)
+
+
 chat_agent = Agent(
     name="chat_assistant",
     model=Gemini(model='gemini-2.5-flash', retry_options=_RETRY_OPTIONS),
     instruction=_CHAT_SYSTEM,
-    tools=[trigger_scan, get_status],
+    tools=[trigger_scan, get_status, list_pending_refinements, apply_pending_refinement],
     before_model_callback=_before_model,
     after_model_callback=_after_model,
 )

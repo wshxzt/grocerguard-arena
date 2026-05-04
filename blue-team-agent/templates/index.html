@@ -109,7 +109,7 @@
 
 <div id="messages">
   <div class="msg assistant">
-    <div class="avatar"><svg viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg" style="width:18px;height:18px;fill:#fff"><path d="M96 8C47.6 8 8 47.6 8 96s39.6 88 88 88 88-39.6 88-88S144.4 8 96 8zm0 36c5.5 0 10.6 2.5 14 6.8L96 96 82 50.8A18 18 0 0 1 96 44zm0 104c-5.5 0-10.6-2.5-14-6.8L96 96l14 45.2A18 18 0 0 1 96 148zm52-52c0 5.5-2.5 10.6-6.8 14L96 96l45.2-14A18 18 0 0 1 148 96zM50.8 110A18 18 0 0 1 44 96c0-5.5 2.5-10.6 6.8-14L96 96 50.8 110z"/></svg></div>
+    <div class="avatar"><svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px"><path d="M8 0C8 4 4 8 0 8C4 8 8 12 8 16C8 12 12 8 16 8C12 8 8 4 8 0Z" fill="#fff"/></svg></div>
     <div class="bubble">Hi! I'm the GrocerGuard blue team agent. I can scan the codebase, patch vulnerabilities, and verify my fixes.
 
 What would you like to do?</div>
@@ -140,7 +140,7 @@ const esc = t => t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;
 function addMsg(role, text, extra='') {
   const d = document.createElement('div');
   d.className = `msg ${role} ${extra}`;
-  const avatarContent = role === 'user' ? 'You' : `<svg viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg" style="width:18px;height:18px;fill:#fff"><path d="M96 8C47.6 8 8 47.6 8 96s39.6 88 88 88 88-39.6 88-88S144.4 8 96 8zm0 36c5.5 0 10.6 2.5 14 6.8L96 96 82 50.8A18 18 0 0 1 96 44zm0 104c-5.5 0-10.6-2.5-14-6.8L96 96l14 45.2A18 18 0 0 1 96 148zm52-52c0 5.5-2.5 10.6-6.8 14L96 96l45.2-14A18 18 0 0 1 148 96zM50.8 110A18 18 0 0 1 44 96c0-5.5 2.5-10.6 6.8-14L96 96 50.8 110z"/></svg>`;
+  const avatarContent = role === 'user' ? 'You' : `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px"><path d="M8 0C8 4 4 8 0 8C4 8 8 12 8 16C8 12 12 8 16 8C12 8 8 4 8 0Z" fill="#fff"/></svg>`;
   d.innerHTML = `<div class="avatar">${avatarContent}</div><div class="bubble">${esc(text)}</div>`;
   msgsEl.appendChild(d);
   msgsEl.scrollTop = msgsEl.scrollHeight;
