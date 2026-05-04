@@ -10,10 +10,22 @@ from google.cloud import spanner
 
 logger = logging.getLogger(__name__)
 
-AGENT_URL     = os.environ.get('AGENT_URL',      'https://red-team-agent-929315648024.us-central1.run.app')
+AGENT_URL     = os.environ.get('AGENT_URL',     'https://red-team-agent-929315648024.us-central1.run.app')
 BLUE_TEAM_URL = os.environ.get('BLUE_TEAM_URL', 'https://blue-team-agent-929315648024.us-central1.run.app')
+APP_URL       = os.environ.get('APP_URL',       'https://grocerguard-hfzinwetfq-uc.a.run.app')
 
 app = Flask(__name__)
+
+
+@app.context_processor
+def inject_service_urls():
+    """Expose deployed-service URLs to every template so links can be themed
+    per-deployment via env vars (APP_URL / AGENT_URL / BLUE_TEAM_URL)."""
+    return {
+        'app_url':       APP_URL,
+        'red_team_url':  AGENT_URL,
+        'blue_team_url': BLUE_TEAM_URL,
+    }
 
 _PST = ZoneInfo('America/Los_Angeles')
 
