@@ -37,7 +37,7 @@ gcloud run deploy "$SERVICE" \
   --allow-unauthenticated \
   --memory 1Gi \
   --timeout 3600 \
-  --min-instances 1 \
+  --min-instances 0 \
   --max-instances 1 \
   --no-cpu-throttling \
   --set-env-vars "SPANNER_PROJECT_ID=$PROJECT,SPANNER_INSTANCE_ID=grocerguard-instance,SPANNER_DATABASE_ID=grocerguard,APP_BASE_URL=https://grocerguard-hfzinwetfq-uc.a.run.app,GCS_BUCKET_NAME=zhiting-personal-grocerguard-images,SCAN_INTERVAL_MINUTES=120" \

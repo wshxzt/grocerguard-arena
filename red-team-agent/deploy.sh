@@ -1,9 +1,11 @@
 #!/bin/bash
 # Build and deploy the red-team-agent.
 #
-# Pinned to a single Cloud Run instance with no CPU throttling so that:
+# Capped at one Cloud Run instance with no CPU throttling so that:
 #   - in-memory run state isn't lost when Cloud Run rotates instances mid-run
 #   - the background pipeline thread keeps running between requests
+# min-instances=0 lets the service scale to zero when idle (cold-start a
+# few seconds on first request, but no idle CPU billing).
 set -e
 
 PROJECT=zhiting-personal
@@ -24,7 +26,7 @@ gcloud run deploy "$SERVICE" \
   --allow-unauthenticated \
   --memory 1Gi \
   --timeout 3600 \
-  --min-instances 1 \
+  --min-instances 0 \
   --max-instances 1 \
   --no-cpu-throttling \
   --project "$PROJECT"
